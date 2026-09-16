@@ -1,0 +1,41 @@
+<Project>
+  <!-- Stage <ModId>/... and zip it, matching the layout the loader requires: every file of
+       a mod must sit inside a top-level folder named exactly the mod id. Shared by every
+       project here so the mods cannot drift apart in packaging.
+
+       Each project gets its own staging root. Zipping a shared one would sweep whichever
+       sibling happened to be built last into this mod's zip. -->
+  <Target Name="CreateModZip" AfterTargets="Build">
+    <PropertyGroup>
+      <StageRoot>$(MSBuildProjectDirectory)/../build/stage/$(ModId)</StageRoot>
+      <StageDir>$(StageRoot)/$(ModId)</StageDir>
+      <ZipPath>$(MSBuildProjectDirectory)/../build/$(ModId).zip</ZipPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <!-- Data files (translations, materials, reactions) shipped inside the mod, staged with
+           their folder structure preserved so the paths named in mod.json resolve inside the
+           zip. The Condition below means a mod with no Data/ directory pays nothing. -->
+      <ModData Include="$(MSBuildProjectDirectory)/Data/**/*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(StageRoot)" />
+    <MakeDir Directories="$(StageDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(StageDir)" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/mod.json" DestinationFolder="$(StageDir)" />
+    <!-- The license travels with the bytes. A zip is what a player actually receives, and a
+         mod distributed without its terms is distributed without its terms however good the
+         repository looks. -->
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../LICENSE" DestinationFolder="$(StageDir)" />
+    <Copy SourceFiles="@(ModData)"
+          DestinationFiles="@(ModData->'$(StageDir)/Data/%(RecursiveDir)%(Filename)%(Extension)')"
+          Condition="'@(ModData)' != ''" />
+    <Delete Files="$(ZipPath)" />
+    <ZipDirectory SourceDirectory="$(StageRoot)" DestinationFile="$(ZipPath)" />
+    <Message Importance="high" Text="mod zip: $(ZipPath)" />
+  </Target>
+
+  <Target Name="InstallModZip" AfterTargets="CreateModZip" Condition="'$(TestInstallDir)' != '' AND Exists('$(TestInstallDir)')">
+    <MakeDir Directories="$(TestInstallDir)/Mods" />
+    <Copy SourceFiles="$(ZipPath)" DestinationFolder="$(TestInstallDir)/Mods" />
+    <Message Importance="high" Text="installed to $(TestInstallDir)/Mods/$(ModId).zip" />
+  </Target>
+</Project>

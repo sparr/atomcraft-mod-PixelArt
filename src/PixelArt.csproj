@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PixelArt: the drawing layer other Atomcraft mods build their overlays on.
+
+    A library mod, so the assembly is named for the namespace rather than for the mod id, the
+    way the TestHarness is: a consumer references Atomcraft.PixelArt.dll and declares a
+    dependency on the module id "PixelArt/Main". ModId is the id the loader sees, and it is
+    what the zip's top-level folder must be called.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PixelArt</AssemblyName>
+    <RootNamespace>PixelArt</RootNamespace>
+    <Version>0.1.0</Version>
+    <LangVersion>latest</LangVersion>
+    <!-- Read by ModZip.targets for the staging folder, the zip name, and the install name.
+         It must match mod.json's "id": the loader requires every file of a mod to sit inside
+         a top-level folder named exactly the mod id. -->
+    <ModId>PixelArt</ModId>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Never copy game assemblies next to the mod DLL: the game already has them loaded, and
+         a second copy in the mod's zip is at best dead weight and at worst a different
+         version that wins nothing and confuses everything. -->
+    <Reference Include="Atomcraft">
+      <HintPath>$(GameDataDir)/Atomcraft.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(GameDataDir)/GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Harmony is bundled by the mod loader; never ship 0Harmony.dll. Match the loader's
+         version (2.4.2) rather than picking a newer one. -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- minimal/ holds a single-file restatement of this mod and stays outside the SDK's
+       **/*.cs glob by living beside src/, not inside it. Nothing to exclude here; the note
+       exists so nobody moves it in. -->
+
+  <Import Project="../ModZip.targets" />
+
+</Project>

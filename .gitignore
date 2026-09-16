@@ -1,0 +1,12 @@
+# Build output. Everything here is reproducible from source.
+bin/
+obj/
+build/
+
+# Local machine configuration: the game install path and the pinned harness both differ
+# per machine. See harness.conf.example.
+Atomcraft.local.props
+harness.conf
+
+# Agent scratch space
+.claude/

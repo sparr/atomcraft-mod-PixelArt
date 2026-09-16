@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A demonstration mod: every mark PixelArt can draw, laid out in the world where a player
+    can see it.
+
+    A peer mod rather than a module of PixelArt, for the same reason the test mod is one: it is
+    separately installable, and a player who wants the library does not want a panel drawn over
+    their spaceship. Unlike the test mod it depends only on PixelArt, never on the harness, so
+    it is something a player can actually install and look at.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PixelArt.Demo</AssemblyName>
+    <RootNamespace>PixelArt.Demo</RootNamespace>
+    <Version>0.1.0</Version>
+    <LangVersion>latest</LangVersion>
+    <ModId>PixelArt.Demo</ModId>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Atomcraft">
+      <HintPath>$(GameDataDir)/Atomcraft.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(GameDataDir)/GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The library being demonstrated. Referenced, never shipped: the loader loads it from its
+         own zip, and a second copy of it here would be a different assembly with the same types. -->
+    <ProjectReference Include="../src/PixelArt.csproj">
+      <Private>false</Private>
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
+    <!-- No Harmony reference, and no Harmony instance: this mod patches nothing. A consumer of
+         PixelArt does not have to, which is worth demonstrating by example. -->
+  </ItemGroup>
+
+  <Import Project="../ModZip.targets" />
+
+</Project>

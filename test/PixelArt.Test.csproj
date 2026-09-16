@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests for the PixelArt mod, run inside the game by the Atomcraft test harness.
+
+    A sibling directory rather than a subdirectory of src/, because it is a peer mod with its
+    own id, zip, and lifecycle, and because a project nested inside another project's
+    directory is swept up by that project's **/*.cs glob: the parent build fails with CS0579
+    duplicate assembly attributes unless it explicitly excludes it.
+
+    It is a separate mod, not a second module of PixelArt: the loader treats a missing
+    dependency as an error, so a test module shipped inside PixelArt.zip would show a red
+    entry in the mod loader report for every player without the harness installed. That matters
+    more here than for most mods, since PixelArt is meant to be installed by players who are
+    running somebody else's overlay.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PixelArt.Test</AssemblyName>
+    <RootNamespace>PixelArt.Test</RootNamespace>
+    <Version>0.1.0</Version>
+    <LangVersion>latest</LangVersion>
+    <ModId>PixelArt.Test</ModId>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Atomcraft">
+      <HintPath>$(GameDataDir)/Atomcraft.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(GameDataDir)/GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The harness ships its own DLL; a test mod references it and ships nothing.
+         run-tests.sh extracts this out of the pinned TestHarness.zip before building, so the
+         assembly compiled against and the one the game loads are the same bytes. -->
+    <Reference Include="Atomcraft.TestHarness">
+      <HintPath>$(TestHarnessDir)/Atomcraft.TestHarness.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The mod under test. Referenced, never shipped: the loader loads it from its own zip. -->
+    <ProjectReference Include="../src/PixelArt.csproj">
+      <Private>false</Private>
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
+    <!-- The demo mod, so the suite can check that what a player is shown still matches what the
+         library offers. Referenced, never shipped. -->
+    <ProjectReference Include="../demo/PixelArt.Demo.csproj">
+      <Private>false</Private>
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <Target Name="RequireTestHarnessDir" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(TestHarnessDir)' == '' OR !Exists('$(TestHarnessDir)/Atomcraft.TestHarness.dll')"
+           Text="No Atomcraft.TestHarness.dll under TestHarnessDir='$(TestHarnessDir)'. Run ./run-tests.sh here, which extracts the assembly out of the pinned TestHarness.zip, or pass -p:TestHarnessDir=&lt;an extracted TestHarness folder&gt;." />
+  </Target>
+
+  <Import Project="../ModZip.targets" />
+
+</Project>

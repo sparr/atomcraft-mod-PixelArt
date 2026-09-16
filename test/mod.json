@@ -1,0 +1,19 @@
+{
+  "id": "PixelArt.Test",
+  "name": "Pixel Art Tests",
+  "description": "Tests for the Pixel Art mod. Install only when running the test harness.",
+  "author": "sparr",
+  "version": "0.1.0",
+  "modules": [
+    {
+      "moduleId": "PixelArt.Test/Main",
+      "dll": "PixelArt.Test.dll",
+      "initClass": "PixelArt.Test.ModEntry",
+      "dependencies": [
+        "PixelArt/Main",
+        "PixelArt.Demo/Main",
+        "TestHarness/Main"
+      ]
+    }
+  ]
+}

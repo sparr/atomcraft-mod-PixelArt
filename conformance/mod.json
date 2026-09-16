@@ -1,0 +1,17 @@
+{
+  "id": "PixelArtConformance",
+  "name": "Overlay Drawing Conformance",
+  "description": "Checks that Atomcraft still lets a mod draw over the world: a canvas layer above the game reaches the frame, and the game's own screen-to-world mapping is the camera's projection. Names no mod: install it alongside any mod, several, or none. Install only when running the test harness.",
+  "author": "sparr",
+  "version": "0.1.0",
+  "modules": [
+    {
+      "moduleId": "PixelArtConformance/Main",
+      "dll": "PixelArtConformance.dll",
+      "initClass": "PixelArtConformance.ModEntry",
+      "dependencies": [
+        "TestHarness/Main"
+      ]
+    }
+  ]
+}
