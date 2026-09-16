@@ -112,8 +112,6 @@ internal static class Renderer
         if (!ViewGeometry.Ready || !GodotObject.IsInstanceValid(Avatars.LocalAvatar))
             return;
 
-        var altHeld = Canvas.AltHeld;
-
         Due.Clear();
         ThisFrame.Clear();
         ThisFrame.AddRange(Canvas.All);
@@ -133,8 +131,8 @@ internal static class Renderer
             if (!canvas.EnsureCanvas())
                 continue;
             canvas.ClearCommands();
-            canvas.DrawMarksAndPasses(altHeld);
-            canvas.CollectPainters(altHeld, Due);
+            canvas.DrawMarksAndPasses();
+            canvas.CollectPainters(Due);
         }
 
         if (Due.Count > 0)

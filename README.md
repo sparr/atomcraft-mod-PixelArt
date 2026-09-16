@@ -86,7 +86,7 @@ Marks.Arrow(tile, Aim.Down, Colors.Red);
 Marks.Clear();
 ```
 
-`Fill`, `Outline`, `Arrow` and `Label` each take a `RectInt` as well as a single pixel, and that is one mark rather than one per pixel: a filled region costs a single draw call, an outlined one gets a single border around the whole block rather than a box per pixel, and an arrow or a label is sized to the block rather than to one pixel of it. At the zoom a world starts at a world pixel is about six screen pixels across -- smaller than any glyph -- so reach for the block overloads whenever the thing you are marking is bigger than one pixel.
+`Fill`, `Outline`, `Arrow`, `Icon` and `Label` each take a `RectInt` as well as a single pixel — retained and `Draw*` alike — and that is one mark rather than one per pixel: a filled region costs a single draw call, an outlined one gets a single border around the whole block rather than a box per pixel, and an arrow or a label is sized to the block rather than to one pixel of it. At the zoom a world starts at a world pixel is about six screen pixels across -- smaller than any glyph -- so reach for the block overloads whenever the thing you are marking is bigger than one pixel.
 
 A **painter** runs for every pixel on screen, every frame, and draws for that frame only. It is the right shape for state that changes as the simulation runs:
 
@@ -114,7 +114,16 @@ Marks.SetPass("cursor", c =>
 Four things about the API that are easy to get wrong:
 
 - **The bare names are retained, the `Draw*` names are for this frame.** `Fill(tile, ...)` adds a mark that is redrawn every frame until `Clear`; `DrawFill(rect, ...)` or `DrawFill(tile, ...)` draws once, now, and is what a pass or a painter calls. Adding a mark every frame is the mistake this naming exists to make visible, and past ten thousand of them the log says so.
-- **`DrawWhen.AltHeld` is nearly always right for a painter.** Alt is already the game's own "tell me more" modifier. A gated painter is not called at all on the other frames, so an expensive one costs nothing until someone asks for it.
+- **Gate a pass or painter with a predicate, not just `DrawWhen`.** `SetPass(name, pass, () => Settings.Enabled && Canvas.AltHeld)` is asked once a frame, before the pass runs — so a painter that is not due costs one delegate call rather than 57,000. `DrawWhen.AltHeld` is the shorthand for `() => Canvas.AltHeld` and nothing more. **Prefer the predicate whenever the condition is partly your own**: AltHeld reads the real keyboard, so a mod whose setting says "only while Alt is held" cannot add "and only when my setting is on" — and no test can reach the drawing at all, because a test cannot hold a key down. A predicate that throws is treated as a pass that throws: removed, canvas faulted, one line in the log.
+- **`ForEachPixel(block, body)` when you want some pixels, not all of them.** A painter is handed every pixel on screen; a pass is handed none. A cursor-sized overlay wants the 169 around the mouse, and this is that walk — corner projected once, rows stepped from it, clipped to what is on screen and inside the world, returning how many it visited. `ForEachPixel(centre, radius, body)` is the common case.
+
+  ```csharp
+  canvas.SetPass("cursor", c =>
+  {
+      if (ViewGeometry.MouseTile() is { } tile)
+          c.ForEachPixel(tile, 6, p => p.Outline(Colors.Yellow));
+  });
+  ```
 - **`TextSize.Auto` picks the largest size that fits the pixel**, at the scale in force, and falls back to the smallest rather than drawing nothing: a label spilling past its pixel can still be read, and an empty pixel looks exactly like a pixel your code decided to skip.
 - **Outline a label rather than plating it, when it sits on something.** `plate:` draws a box behind the text; `outline:` draws the text four times in a surround colour, offset a screen pixel each way, and once more on top. Over the game's machines -- which are all fully saturated primaries -- a plate works and looks like what it is: at the sizes a label reaches when zoomed in, a black rectangle covering the very pixel being described. An outline leaves the machine visible between the letters. It costs five textured rects per glyph, which is nothing at any sane number of labels.
 - **`TextSize.Fit` picks the scale too, so the text tracks the pixel as the view zooms.** Auto keeps the scale you asked for, so zooming out leaves the text the same size while the pixels shrink underneath it until neighbouring labels overlap into a grey smear. Fit shrinks with them and then, once even the smallest font no longer fits, draws nothing. Use Fit for a label that belongs to *a pixel* and would be noise once it cannot fit inside one; use Auto or a named size for a label that belongs to *the reader* -- a heading, a readout, anything they are meant to find rather than stumble on. Fit prefers detail over size, so a 9x13 at 1x beats a 5x7 doubled, and the player's `textScale` does not apply to it: what fits inside a pixel is the pixel's business. `Canvas.FitFor(tile, text)` answers in advance, and a scale of 0 means it would not be drawn.
@@ -194,6 +203,7 @@ cp harness.conf.example harness.conf   # and point it at a TestHarness release
 ./run-tests.sh                         # this project's tests
 ./run-tests.sh --headful               # and the ones that need something on screen
 ./run-tests.sh --retirement            # is the game still the shape this works around?
+./run-tests.sh --no-build              # test what is installed; how a release is verified
 ./play.sh --demo                       # play it as a player would: the library and the demo
 ./play.sh --debug                      # the harness's debug overlay instead
 ```

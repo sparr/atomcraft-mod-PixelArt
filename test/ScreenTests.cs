@@ -143,6 +143,76 @@ public static class ScreenTests
     }
 
     /// <summary>
+    /// <c>ForEachPixel</c> walks exactly the block asked for, clipped to what is on screen, and
+    /// hands over the same thing a painter gets.
+    ///
+    /// <para>The point of it is that a cursor-sized overlay wants 169 pixels and a painter offers
+    /// 57,000. Before this existed every such mod reprojected the corner and stepped the rows for
+    /// itself -- and could not build a <c>VisiblePixel</c> anyway, since the constructor is
+    /// internal.</para>
+    /// </summary>
+    [GameTest(RequiresDisplay = true)]
+    public static IEnumerator ForEachPixelWalksTheBlockItWasGiven()
+    {
+        yield return Session.Enter("flat");
+        var tile = Anchor();
+        yield return View.LookAt(tile);
+
+        Session.SetPixel(tile.X, tile.Y, "Granite");
+        var granite = Materials.GetBaseMaterialId("Granite");
+
+        var canvas = Canvas.For(Owner);
+        try
+        {
+            const int radius = 6;
+            var seen = 0;
+            short sawMaterial = -1;
+            var sawRect = new Rect2();
+            var sawCentre = false;
+
+            var visited = canvas.ForEachPixel(tile, radius, p =>
+            {
+                seen++;
+                if (p.Tile != tile)
+                    return;
+                sawCentre = true;
+                sawMaterial = p.MaterialTypeId;
+                sawRect = p.Screen;
+            });
+
+            var side = 2 * radius + 1;
+            if (visited != side * side)
+                throw new AssertionException(
+                    $"a radius of {radius} around a tile in open view is {side}x{side} pixels; " +
+                    $"it walked {visited}");
+            if (visited != seen)
+                throw new AssertionException(
+                    $"it reported {visited} but called the body {seen} time(s)");
+            if (!sawCentre)
+                throw new AssertionException($"the block never included its own centre {tile}");
+            if (sawMaterial != granite)
+                throw new AssertionException(
+                    $"it saw material {sawMaterial} at {tile}, expected Granite ({granite})");
+            if (sawRect.Position.DistanceTo(ViewGeometry.ScreenRectOf(tile).Position) > 1f)
+                throw new AssertionException(
+                    $"it placed {tile} at {sawRect.Position} but ScreenRectOf says " +
+                    $"{ViewGeometry.ScreenRectOf(tile).Position}");
+
+            // Clipped rather than refused: a block off the edge of the view yields the part that
+            // is on it, and a block entirely off yields nothing.
+            var far = new RectInt(tile.X + 100_000, tile.Y, 4, 4);
+            if (canvas.ForEachPixel(far, _ => throw new Exception("walked an off-screen pixel")) != 0)
+                throw new AssertionException("a block far off screen was walked anyway");
+        }
+        finally
+        {
+            Canvas.Forget(Owner);
+        }
+
+        yield return Session.Leave();
+    }
+
+    /// <summary>
     /// A painter that throws takes its own canvas down and leaves every other canvas drawing.
     ///
     /// <para>This is the difference between a shared drawing layer and a shared point of failure,

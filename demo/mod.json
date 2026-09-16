@@ -3,7 +3,7 @@
   "name": "Pixel Art Demo",
   "description": "Draws one example of everything Pixel Art can do, in the world, where you spawn. Install it to see what the library offers, uninstall it when you have seen it.",
   "author": "sparr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "modules": [
     {
       "moduleId": "PixelArt.Demo/Main",

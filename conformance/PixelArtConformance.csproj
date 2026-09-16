@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PixelArtConformance</AssemblyName>
     <RootNamespace>PixelArtConformance</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <LangVersion>latest</LangVersion>
     <ModId>PixelArtConformance</ModId>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

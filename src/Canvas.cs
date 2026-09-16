@@ -400,10 +400,21 @@ public sealed class Canvas
     private sealed class Pass
     {
         public string Name = "";
-        public DrawWhen When;
+
+        /// <summary>When to run. Null means every frame, which is the cheap common case.</summary>
+        public Func<bool>? When;
         public Action<Canvas>? WholeFrame;
         public Action<VisiblePixel>? PerPixel;
     }
+
+    /// <summary>
+    /// The predicate <see cref="DrawWhen.AltHeld"/> is shorthand for. One instance rather than a
+    /// lambda per registration, since registering is not where the cost should be.
+    /// </summary>
+    private static readonly Func<bool> WhileAltHeld = () => AltHeld;
+
+    private static Func<bool>? PredicateFor(DrawWhen when) =>
+        when == DrawWhen.AltHeld ? WhileAltHeld : null;
 
     private readonly List<Pass> _passes = new();
 
@@ -417,6 +428,26 @@ public sealed class Canvas
     /// far cheaper than being handed all 57,000 on screen and rejecting most of them.</para>
     /// </summary>
     public void SetPass(string name, Action<Canvas> pass, DrawWhen when = DrawWhen.Always) =>
+        Replace(new Pass { Name = name, When = PredicateFor(when), WholeFrame = pass });
+
+    /// <summary>
+    /// Registers a once-a-frame callback that runs only when <paramref name="when"/> says so.
+    ///
+    /// <para>The predicate is asked once per frame, before the pass is called, and the pass is not
+    /// called at all when it answers false -- so an expensive pass behind a false predicate costs
+    /// one delegate call a frame.</para>
+    ///
+    /// <para><b>Prefer this to <see cref="DrawWhen.AltHeld"/> whenever the condition is the mod's
+    /// own.</b> AltHeld reads the real keyboard and nothing else, so a mod whose own setting says
+    /// "only while Alt is held" cannot express "and only when my setting is on", and no test can
+    /// reach the drawing at all: a test cannot hold a key down. A predicate is both. AltHeld
+    /// remains as the shorthand for <c>() =&gt; Canvas.AltHeld</c>, which is what it now is.</para>
+    ///
+    /// <para>A predicate that throws is treated exactly as a pass that throws: removed, its canvas
+    /// faulted, one line in the log. It runs on the same per-frame path and must not be the thing
+    /// that fills a disk.</para>
+    /// </summary>
+    public void SetPass(string name, Action<Canvas> pass, Func<bool> when) =>
         Replace(new Pass { Name = name, When = when, WholeFrame = pass });
 
     /// <summary>
@@ -437,6 +468,17 @@ public sealed class Canvas
     /// other canvas keeps drawing.</para>
     /// </summary>
     public void SetPainter(string name, Action<VisiblePixel> painter, DrawWhen when = DrawWhen.Always) =>
+        Replace(new Pass { Name = name, When = PredicateFor(when), PerPixel = painter });
+
+    /// <summary>
+    /// Registers a per-pixel painter that runs only when <paramref name="when"/> says so. See
+    /// <see cref="SetPass(string, Action{Canvas}, Func{bool})"/> for why a predicate is usually
+    /// the better gate.
+    ///
+    /// <para>The predicate is asked once per frame, not once per pixel, so a painter that is not
+    /// due costs one delegate call rather than 57,000.</para>
+    /// </summary>
+    public void SetPainter(string name, Action<VisiblePixel> painter, Func<bool> when) =>
         Replace(new Pass { Name = name, When = when, PerPixel = painter });
 
     private void Replace(Pass pass)
@@ -448,10 +490,89 @@ public sealed class Canvas
     /// <summary>Removes a pass or painter by name. Removing one that was never registered is not an error.</summary>
     public void Remove(string name) => _passes.RemoveAll(p => p.Name == name);
 
+    /// <summary>
+    /// Runs <paramref name="body"/> over a block of pixels, handing it each one the way a painter
+    /// is handed one: the tile, what is in it, and where it is on screen.
+    ///
+    /// <para><b>This is what a cursor-sized pass wants.</b> A painter is handed every pixel on
+    /// screen -- about 57,000 at the zoom a world starts at -- and a mod that cares about the 169
+    /// around the cursor spends 56,831 delegate calls saying no. A pass gets none and has to walk
+    /// them itself, which means reprojecting the corner and stepping the rows, which is this
+    /// method. Now it is four lines:</para>
+    ///
+    /// <code>
+    /// canvas.SetPass("cursor", c =&gt;
+    /// {
+    ///     if (ViewGeometry.MouseTile() is { } tile)
+    ///         c.ForEachPixel(ViewGeometry.Around(tile, 6), p =&gt; p.Outline(Colors.Yellow));
+    /// });
+    /// </code>
+    ///
+    /// <para>The block is clipped to what is actually on screen and inside the world, so a caller
+    /// need not check either: a radius that runs off the edge of the view simply yields fewer
+    /// pixels. Returns how many it visited, which is the number worth logging when a pass looks
+    /// like it is doing nothing.</para>
+    ///
+    /// <para>The corner is projected once and the rows are stepped from it, rather than asking
+    /// <see cref="ViewGeometry.ScreenRectOf(Vector2I)"/> per pixel -- that call asks the engine for
+    /// the camera and the viewport every time, which is the cost this exists to avoid.</para>
+    ///
+    /// <para>An exception from <paramref name="body"/> is not caught here. Called from a pass, as
+    /// intended, the pass's own guard has it: the canvas faults and the pass is removed, exactly as
+    /// if the throw had happened directly in the pass.</para>
+    /// </summary>
+    public int ForEachPixel(RectInt tiles, Action<VisiblePixel> body)
+    {
+        var field = Simulation.CurrentState?.Field;
+        if (field == null || ViewGeometry.VisibleTiles() is not { } onScreen)
+            return 0;
+
+        var area = tiles.Intersection(onScreen);
+        if (area.width <= 0 || area.height <= 0)
+            return 0;
+
+        var size = ViewGeometry.PixelScreenSize;
+        var corner = ViewGeometry.WorldToScreen(
+            new Vector2(area.min.X * ViewGeometry.TileSize, area.min.Y * ViewGeometry.TileSize));
+
+        var visited = 0;
+        for (var y = area.min.Y; y < area.max.Y; y++)
+        for (var x = area.min.X; x < area.max.X; x++)
+        {
+            var screen = new Rect2(corner.X + (x - area.min.X) * size,
+                                   corner.Y + (y - area.min.Y) * size,
+                                   size, size);
+            body(new VisiblePixel(this, new Vector2I(x, y), field.Get(x, y), screen));
+            visited++;
+        }
+        return visited;
+    }
+
+    /// <summary>Runs <paramref name="body"/> over the pixels within <paramref name="radius"/> of a tile.</summary>
+    public int ForEachPixel(Vector2I centre, int radius, Action<VisiblePixel> body) =>
+        ForEachPixel(ViewGeometry.Around(centre, radius), body);
+
     /// <summary>Whether the player is holding Alt right now, read the same way the game reads it.</summary>
     public static bool AltHeld => Input.IsKeyPressed(Key.Alt);
 
-    private bool Due(Pass pass, bool altHeld) => pass.When == DrawWhen.Always || altHeld;
+    /// <summary>
+    /// Whether a pass is due this frame, with the predicate's own failure handled here rather
+    /// than left to escape into the shared frame.
+    /// </summary>
+    private bool Due(Pass pass)
+    {
+        if (pass.When == null)
+            return true;
+        try
+        {
+            return pass.When();
+        }
+        catch (Exception e)
+        {
+            Blame(pass, e, " deciding whether to run");
+            return false;
+        }
+    }
 
     /// <summary>Whether this canvas has anything at all to put on screen this frame.</summary>
     internal bool HasWork => Visible && !Faulted && (_marks.Count > 0 || _passes.Count > 0);
@@ -461,7 +582,7 @@ public sealed class Canvas
     /// by <see cref="Renderer"/>, which walks the visible pixels once for every canvas rather
     /// than once each.
     /// </summary>
-    internal void DrawMarksAndPasses(bool altHeld)
+    internal void DrawMarksAndPasses()
     {
         foreach (var mark in _marks)
             mark.Draw(this);
@@ -470,7 +591,7 @@ public sealed class Canvas
         // from the live list below.
         foreach (var pass in _passes.ToArray())
         {
-            if (pass.WholeFrame == null || !Due(pass, altHeld))
+            if (pass.WholeFrame == null || !Due(pass))
                 continue;
             try
             {
@@ -485,10 +606,10 @@ public sealed class Canvas
     }
 
     /// <summary>Every per-pixel painter due to run this frame, appended to <paramref name="into"/>.</summary>
-    internal void CollectPainters(bool altHeld, List<(Canvas Canvas, object Pass)> into)
+    internal void CollectPainters(List<(Canvas Canvas, object Pass)> into)
     {
         foreach (var pass in _passes)
-            if (pass.PerPixel != null && Due(pass, altHeld))
+            if (pass.PerPixel != null && Due(pass))
                 into.Add((this, pass));
     }
 
@@ -613,6 +734,9 @@ public sealed class Canvas
     /// <summary>Paints a pixel, for this frame only.</summary>
     public void DrawFill(Vector2I tile, Color color) => DrawFill(ViewGeometry.ScreenRectOf(tile), color);
 
+    /// <summary>Paints a block of pixels, for this frame only.</summary>
+    public void DrawFill(RectInt tiles, Color color) => DrawFill(ViewGeometry.ScreenRectOf(tiles), color);
+
     /// <summary>Outlines a screen rectangle from the inside, for this frame only.</summary>
     public void DrawOutline(Rect2 screen, Color color, float thickness = 1f)
     {
@@ -636,6 +760,10 @@ public sealed class Canvas
     /// <summary>Outlines a pixel, for this frame only.</summary>
     public void DrawOutline(Vector2I tile, Color color, float thickness = 1f) =>
         DrawOutline(ViewGeometry.ScreenRectOf(tile), color, thickness);
+
+    /// <summary>Draws one border around a whole block of pixels, for this frame only.</summary>
+    public void DrawOutline(RectInt tiles, Color color, float thickness = 1f) =>
+        DrawOutline(ViewGeometry.ScreenRectOf(tiles), color, thickness);
 
     /// <summary>
     /// A triangle on one edge of a rectangle, pointing out of it, for this frame only.

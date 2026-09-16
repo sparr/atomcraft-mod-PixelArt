@@ -3,7 +3,7 @@
   "name": "Pixel Art Tests",
   "description": "Tests for the Pixel Art mod. Install only when running the test harness.",
   "author": "sparr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "modules": [
     {
       "moduleId": "PixelArt.Test/Main",

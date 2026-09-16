@@ -203,6 +203,37 @@ public static class CanvasTests
     }
 
     /// <summary>
+    /// Every shape can be drawn against a block of pixels as well as a single one, for a frame as
+    /// well as retained.
+    ///
+    /// <para>Asymmetry here is a papercut a consumer hits and works around rather than reports:
+    /// <c>DrawArrow</c>, <c>DrawIcon</c> and <c>DrawLabel</c> took a <c>RectInt</c> while
+    /// <c>DrawFill</c> and <c>DrawOutline</c> did not, so a mod drawing a block had to reach for
+    /// <c>ViewGeometry.ScreenRectOf</c> for two of the five and not the others. Checked by
+    /// reflection rather than by calling them, so the test is about the shape of the API and runs
+    /// with no display.</para>
+    /// </summary>
+    [GameTest]
+    public static void EveryShapeTakesABlockOfPixels()
+    {
+        var canvas = typeof(Canvas);
+        var rect = typeof(RectInt);
+
+        foreach (var name in new[] { "Fill", "Outline", "Arrow", "Icon", "Label",
+                                     "DrawFill", "DrawOutline", "DrawArrow", "DrawIcon", "DrawLabel" })
+        {
+            var takesBlock = canvas.GetMethods()
+                .Where(m => m.Name == name)
+                .Any(m => m.GetParameters().FirstOrDefault()?.ParameterType == rect);
+
+            if (!takesBlock)
+                throw new AssertionException(
+                    $"Canvas.{name} has no RectInt overload, so a mod marking a block of pixels " +
+                    "has to project the rectangle itself for this one shape and not the others");
+        }
+    }
+
+    /// <summary>
     /// The player's text scale multiplies what a mod asked for, in measuring as well as in
     /// drawing.
     ///

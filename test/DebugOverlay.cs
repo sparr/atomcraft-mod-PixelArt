@@ -36,50 +36,47 @@ internal static class DebugOverlay
         // A whole-frame pass rather than a per-pixel painter, because this wants 81 pixels and a
         // painter would be handed 57,000 to reject. The choice a consumer makes between the two is
         // exactly this one.
+        // Gated on a predicate rather than on DrawWhen.AltHeld, even though the condition is
+        // exactly "Alt is held". A predicate is something a test can drive; the keyboard is not.
         Canvas.For("PixelArt.debug", Canvas.TopLayer - 1)
-              .SetPass("cursor", Draw, DrawWhen.AltHeld);
+              .SetPass("cursor", Draw, () => ShowAlways || Canvas.AltHeld);
     }
+
+    /// <summary>
+    /// Forced on, so a test can drive this without holding a key. The whole reason the pass is
+    /// gated on a predicate rather than on <c>DrawWhen.AltHeld</c>.
+    /// </summary>
+    internal static bool ShowAlways;
+
+    /// <summary>How many pixels the last pass looked at, for a test to assert on.</summary>
+    internal static int ScannedLastFrame;
 
     private static void Draw(Canvas canvas)
     {
         var field = Simulation.CurrentState?.Field;
-        var visible = ViewGeometry.VisibleTiles();
-        var mouse = ViewGeometry.MouseTile();
-        if (field == null || visible == null || mouse == null)
+        if (field == null || ViewGeometry.MouseTile() is not { } mouse)
             return;
 
-        var area = ViewGeometry.Around(mouse.Value, Radius).Intersection(visible.Value);
-        if (area.width <= 0 || area.height <= 0)
-            return;
-
-        // The corner is projected once and the loop steps from it. Going through ScreenRectOf per
-        // pixel would ask the engine for the camera and the viewport on every one of them.
-        var pixel = ViewGeometry.PixelScreenSize;
-        var corner = ViewGeometry.WorldToScreen(
-            new Vector2(area.min.X * ViewGeometry.TileSize, area.min.Y * ViewGeometry.TileSize));
-
-        for (var y = area.min.Y; y < area.max.Y; y++)
-        for (var x = area.min.X; x < area.max.X; x++)
+        // The whole walk, including the corner projection, the row stepping and the clipping to
+        // what is on screen. This used to be twenty lines here; ForEachPixel exists because every
+        // cursor-sized overlay was writing them again.
+        ScannedLastFrame = canvas.ForEachPixel(mouse, Radius, p =>
         {
-            var rect = new Rect2(corner.X + (x - area.min.X) * pixel,
-                                 corner.Y + (y - area.min.Y) * pixel,
-                                 pixel, pixel);
-            var material = field.Get(x, y);
-            if (material < 0)
-                continue;                       // air, and there is nothing to say about it
-            canvas.DrawOutline(rect, new Color(Ink, 0.5f));
-        }
+            if (p.MaterialTypeId < 0)
+                return;                         // air, and there is nothing to say about it
+            p.Outline(new Color(Ink, 0.5f));
+        });
 
         // The pixel under the cursor gets the detail: its coordinates and what is in it, with the
         // label below the pixel so the cursor is not sitting on top of the text.
-        var here = ViewGeometry.ScreenRectOf(mouse.Value);
+        var here = ViewGeometry.ScreenRectOf(mouse);
         canvas.DrawOutline(here, Ink, 2f);
         canvas.DrawArrow(here, Aim.Up, Ink);
 
-        var name = field.Get(mouse.Value.X, mouse.Value.Y) is var id && id >= 0
+        var name = field.Get(mouse.X, mouse.Y) is var id && id >= 0
             ? id.ToMaterialName()
             : "air";
-        canvas.DrawLabel(here, $"{mouse.Value.X},{mouse.Value.Y}\n{name}", Ink,
+        canvas.DrawLabel(here, $"{mouse.X},{mouse.Y}\n{name}", Ink,
                          TextSize.Small, LabelPlacement.Below, plate: Plate);
     }
 }
