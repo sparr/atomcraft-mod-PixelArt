@@ -82,13 +82,16 @@ internal static class Renderer
 
         PixelsPaintedLastFrame = 0;
 
-        if (Headless)
+        // Headless, and nobody asked for the passes to run anyway: this is a dedicated server or
+        // an ordinary headless test run, and every frame of it should cost nothing.
+        if (Headless && !PixelArtApi.RunPassesWithoutDisplay)
         {
             if (!_warnedHeadless && Canvas.All.Count > 0)
             {
                 _warnedHeadless = true;
-                Log.Info("idle: there is no display to draw on. Under the test harness, mark a " +
-                         "test [GameTest(RequiresDisplay = true)] and run with --headful.");
+                Log.Info("idle: there is no display to draw on, so no pass is being run. A test " +
+                         "that wants its per-pixel logic exercised anyway can set " +
+                         "PixelArtApi.RunPassesWithoutDisplay; the draw calls are then discarded.");
             }
             return;
         }
@@ -128,7 +131,10 @@ internal static class Renderer
                 canvas.ClearCommands();
                 continue;
             }
-            if (!canvas.EnsureCanvas())
+            // Headless there is nothing to build and nothing to clear, and every Draw call is a
+            // no-op on a canvas with no item -- which is exactly what makes running the passes
+            // anyway cheap and safe. With a display, a canvas that cannot be built is skipped.
+            if (!Headless && !canvas.EnsureCanvas())
                 continue;
             canvas.ClearCommands();
             canvas.DrawMarksAndPasses();

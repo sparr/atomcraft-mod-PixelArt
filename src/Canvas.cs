@@ -552,6 +552,59 @@ public sealed class Canvas
     public int ForEachPixel(Vector2I centre, int radius, Action<VisiblePixel> body) =>
         ForEachPixel(ViewGeometry.Around(centre, radius), body);
 
+    /// <summary>
+    /// The same walk, but <paramref name="body"/> returns whether to keep going: false stops it
+    /// where it stands.
+    ///
+    /// <para>Irrelevant for a block of 169 pixels and worth having for a scan of the whole screen,
+    /// where the answer is usually found long before the end. Returns how many pixels were
+    /// visited, including the one that stopped it.</para>
+    ///
+    /// <code>
+    /// Vector2I? found = null;
+    /// canvas.ForEachPixelWhile(area, p =&gt;
+    /// {
+    ///     if (p.MaterialTypeId != wanted) return true;   // keep looking
+    ///     found = p.Tile; return false;                  // stop here
+    /// });
+    /// </code>
+    ///
+    /// <para>A separate name rather than an overload: <c>Action&lt;VisiblePixel&gt;</c> and
+    /// <c>Func&lt;VisiblePixel, bool&gt;</c> are ambiguous for some lambda bodies, and a caller
+    /// should never have to think about which one a lambda bound to.</para>
+    /// </summary>
+    public int ForEachPixelWhile(RectInt tiles, Func<VisiblePixel, bool> body)
+    {
+        var field = Simulation.CurrentState?.Field;
+        if (field == null || ViewGeometry.VisibleTiles() is not { } onScreen)
+            return 0;
+
+        var area = tiles.Intersection(onScreen);
+        if (area.width <= 0 || area.height <= 0)
+            return 0;
+
+        var size = ViewGeometry.PixelScreenSize;
+        var corner = ViewGeometry.WorldToScreen(
+            new Vector2(area.min.X * ViewGeometry.TileSize, area.min.Y * ViewGeometry.TileSize));
+
+        var visited = 0;
+        for (var y = area.min.Y; y < area.max.Y; y++)
+        for (var x = area.min.X; x < area.max.X; x++)
+        {
+            var screen = new Rect2(corner.X + (x - area.min.X) * size,
+                                   corner.Y + (y - area.min.Y) * size,
+                                   size, size);
+            visited++;
+            if (!body(new VisiblePixel(this, new Vector2I(x, y), field.Get(x, y), screen)))
+                return visited;
+        }
+        return visited;
+    }
+
+    /// <summary>The stopping walk, over the pixels within <paramref name="radius"/> of a tile.</summary>
+    public int ForEachPixelWhile(Vector2I centre, int radius, Func<VisiblePixel, bool> body) =>
+        ForEachPixelWhile(ViewGeometry.Around(centre, radius), body);
+
     /// <summary>Whether the player is holding Alt right now, read the same way the game reads it.</summary>
     public static bool AltHeld => Input.IsKeyPressed(Key.Alt);
 

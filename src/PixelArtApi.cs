@@ -110,8 +110,37 @@ public static class PixelArtApi
     /// </summary>
     public static int PixelsPaintedLastFrame => Renderer.PixelsPaintedLastFrame;
 
-    /// <summary>Whether this process has a display to draw on. Everything is inert when it does not.</summary>
+    /// <summary>Whether this process has a display to draw on.</summary>
     public static bool HasDisplay => !Renderer.Headless;
+
+    /// <summary>
+    /// Run every pass and painter on a headless frame too, discarding the draw calls. Off by
+    /// default.
+    ///
+    /// <para><b>What this is for.</b> Without it, nothing a consumer draws is observable without
+    /// a display: the shared pass returns before any pass runs, so a mod's own per-pixel logic
+    /// never executes and a counter it increments never moves. That costs more than one test. The
+    /// convention in this family asks every suite for exactly one test that would fail if the mod
+    /// were not really installed, and that test has to watch something actually happen -- so
+    /// without this it must be <c>RequiresDisplay</c>, and the everyday headless loop is left
+    /// asserting only that a pass is <i>registered</i>, which nobody watched fire.</para>
+    ///
+    /// <para>Set it from a test mod's <c>Initialize</c>. The per-pixel logic is the part worth
+    /// exercising cheaply; the <c>RenderingServer</c> calls are the part that genuinely needs a
+    /// window, and those are discarded here -- every <c>Draw</c> is a no-op on a canvas with no
+    /// item, so nothing is allocated and no font atlas is built.</para>
+    ///
+    /// <para><b>Deliberately not cleared by <see cref="ResetState"/>.</b> Everything else there is
+    /// state a test might leave behind by failing; this is a decision a test mod makes once, at
+    /// load, about the whole run. Resetting it between tests would switch it off before the first
+    /// test that needed it, which is its only purpose. It is reported by
+    /// <see cref="DescribeState"/> instead, so a confusing headless failure says whether passes
+    /// were running.</para>
+    ///
+    /// <para>A real headless server pays nothing: left false, the frame returns exactly where it
+    /// did before.</para>
+    /// </summary>
+    public static bool RunPassesWithoutDisplay { get; set; }
 
     /// <summary>What is registered and what state it is in, as one line for the log.</summary>
     public static string Describe() =>
@@ -155,5 +184,6 @@ public static class PixelArtApi
     /// </summary>
     public static string DescribeState() =>
         $"{Settings.Describe()} enabled={Enabled} faulted={Faulted} " +
-        $"display={HasDisplay} painted={PixelsPaintedLastFrame} {Describe()}";
+        $"display={HasDisplay} headlessPasses={RunPassesWithoutDisplay} " +
+        $"painted={PixelsPaintedLastFrame} {Describe()}";
 }

@@ -124,6 +124,8 @@ Four things about the API that are easy to get wrong:
           c.ForEachPixel(tile, 6, p => p.Outline(Colors.Yellow));
   });
   ```
+
+  `ForEachPixelWhile` is the same walk with a `Func<VisiblePixel, bool>`: return false and it stops where it stands. Irrelevant for a block of 169 pixels, and what a scan of the whole screen wants, since the answer is usually found long before the end. A separate name rather than an overload, because `Action<T>` and `Func<T, bool>` are ambiguous for some lambda bodies and you should never have to think about which one yours bound to.
 - **`TextSize.Auto` picks the largest size that fits the pixel**, at the scale in force, and falls back to the smallest rather than drawing nothing: a label spilling past its pixel can still be read, and an empty pixel looks exactly like a pixel your code decided to skip.
 - **Outline a label rather than plating it, when it sits on something.** `plate:` draws a box behind the text; `outline:` draws the text four times in a surround colour, offset a screen pixel each way, and once more on top. Over the game's machines -- which are all fully saturated primaries -- a plate works and looks like what it is: at the sizes a label reaches when zoomed in, a black rectangle covering the very pixel being described. An outline leaves the machine visible between the letters. It costs five textured rects per glyph, which is nothing at any sane number of labels.
 - **`TextSize.Fit` picks the scale too, so the text tracks the pixel as the view zooms.** Auto keeps the scale you asked for, so zooming out leaves the text the same size while the pixels shrink underneath it until neighbouring labels overlap into a grey smear. Fit shrinks with them and then, once even the smallest font no longer fits, draws nothing. Use Fit for a label that belongs to *a pixel* and would be noise once it cannot fit inside one; use Auto or a named size for a label that belongs to *the reader* -- a heading, a readout, anything they are meant to find rather than stumble on. Fit prefers detail over size, so a 9x13 at 1x beats a 5x7 doubled, and the player's `textScale` does not apply to it: what fits inside a pixel is the pixel's business. `Canvas.FitFor(tile, text)` answers in advance, and a scale of 0 means it would not be drawn.
@@ -151,6 +153,18 @@ Given a mark, a body and a pixel, it tries the whole body wrapped, then the whol
 When not even one character fits — the ordinary case at the game's own maximum zoom, where a pixel is 12 screen pixels across and two characters are 11 wide — it returns the fullest candidate with `Overflows` set rather than nothing, because an empty pixel looks exactly like a pixel your mod had no opinion about. **A caller drawing many labels at once should check `Overflows` and skip:** one overflowing label is readable, a hundred on adjacent pixels is a grey smear. That decision is yours because both answers are right for somebody.
 
 A fitted label is drawn with `DrawLabel` only — there is no retained overload. It is an answer about how big the pixel was on one frame, and a retained mark is redrawn at every zoom after that: right once, then quietly wrong.
+
+### Testing a consumer without a window
+
+By default a headless frame returns before any pass runs, so nothing you draw happens — which also means nothing your pass *computes* happens, and a counter it increments never moves. That costs more than the drawing. The convention in this family asks every suite for exactly one test that would fail if the mod were not really installed, and such a test has to watch something happen; without help it has to be `RequiresDisplay`, leaving the everyday headless loop asserting only that a pass is *registered* — true, weaker, and nobody watched it fire.
+
+```csharp
+PixelArtApi.RunPassesWithoutDisplay = true;   // from your test mod's Initialize
+```
+
+Passes and painters then run on headless frames and every draw call is discarded: a `Draw` on a canvas with no item is a no-op, so nothing is allocated and no font atlas is built. Your per-pixel logic is the part worth exercising cheaply; the `RenderingServer` calls are the part that genuinely needs a window.
+
+Left alone it changes nothing, so a dedicated server pays exactly what it did before. It is deliberately **not** cleared by `PixelArtApi.ResetState`: everything else there is state a test might leave behind by failing, while this is a decision a test mod makes once at load, and clearing it between tests would switch it off before the first test that needed it. `DescribeState` reports it instead, so a confusing headless failure says whether passes were running.
 
 ### Shapes from the game's own art
 
