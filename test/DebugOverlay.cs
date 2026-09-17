@@ -46,7 +46,7 @@ internal static class DebugOverlay
     /// Forced on, so a test can drive this without holding a key. The whole reason the pass is
     /// gated on a predicate rather than on <c>DrawWhen.AltHeld</c>.
     /// </summary>
-    internal static bool ShowAlways;
+    internal static bool ShowAlways { get; set; }
 
     /// <summary>How many pixels the last pass looked at, for a test to assert on.</summary>
     internal static int ScannedLastFrame;

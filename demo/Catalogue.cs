@@ -68,8 +68,8 @@ internal sealed class Layout
 /// looking at it: pan and zoom, and every one of these stays on the pixels it was put on, while
 /// the text stays the size it was asked for.</para>
 ///
-/// <para>Captions are upper case because the two smaller fonts are drawn for digits and capitals;
-/// their lowercase has no room below the baseline. At the zoom a world starts at, a pixel is about
+/// <para>Captions are upper case because the two smaller fonts are drawn for digits and capitals:
+/// three columns and five make a better B than a b. At the zoom a world starts at, a pixel is about
 /// six screen pixels, so the captions here are drawn at scale 2 to stay readable, and everything
 /// only gets clearer as you zoom in -- text is measured in screen pixels and pixels are not.</para>
 /// </summary>
@@ -185,11 +185,11 @@ internal static class Catalogue
         Caption(c, l, dy, "TEXT SIZE\nTHREE FONTS, NOT ONE");
 
         // Named rather than left to Auto, because the point here is the difference between them.
-        // They are separate fonts, not one scaled three ways: 9x13 buys round bowls, real
+        // They are separate fonts, not one scaled three ways: 7x11 buys round bowls, real
         // diagonals and descenders that a magnified 3x5 glyph cannot have.
         c.Label(l.At(Layout.ExampleX + 2, dy + 3), "3X5", Palette.Ink, TextSize.Small, scale: 2);
         c.Label(l.At(Layout.ExampleX + 12, dy + 3), "5X7", Palette.Ink, TextSize.Medium, scale: 2);
-        c.Label(l.At(Layout.ExampleX + 28, dy + 3), "9X13", Palette.Ink, TextSize.Large, scale: 2);
+        c.Label(l.At(Layout.ExampleX + 28, dy + 3), "7X11", Palette.Ink, TextSize.Large, scale: 2);
     }
 
     /// <summary>Everything else a label can do: a plate, two lines, a glyph past ASCII.</summary>

@@ -34,48 +34,63 @@ public static class FontTests
     [GameTest]
     public static void TheThreeSizesAreDistinctFonts()
     {
-        Expect(PixelFont.Small, 3, 5, 1, descenders: false);
-        Expect(PixelFont.Medium, 5, 7, 2, descenders: false);
-        Expect(PixelFont.Large, 9, 13, 3, descenders: true);
+        Expect(PixelFont.Small, 3, 5, descender: 1, h: 1, v: 1);
+        Expect(PixelFont.Medium, 5, 7, descender: 1, h: 1, v: 2);
+        Expect(PixelFont.Large, 7, 11, descender: 2, h: 1, v: 3);
 
-        static void Expect(PixelFont font, int w, int h, int spacing, bool descenders)
+        static void Expect(PixelFont font, int w, int boxHeight, int descender, int h, int v)
         {
-            if (font.GlyphWidth != w || font.GlyphHeight != h || font.Spacing != spacing)
+            if (font.GlyphWidth != w || font.GlyphHeight != boxHeight ||
+                font.DescenderDepth != descender ||
+                font.HorizontalSpacing != h || font.VerticalSpacing != v)
                 throw new AssertionException(
-                    $"{font.Name} is {font.GlyphWidth}x{font.GlyphHeight} with {font.Spacing} " +
-                    $"spacing, expected {w}x{h} with {spacing}");
-            if (font.HasDescenders != descenders)
+                    $"{font.Name} is {font.GlyphWidth}x{font.GlyphHeight}+{font.DescenderDepth} " +
+                    $"with {font.HorizontalSpacing}/{font.VerticalSpacing} spacing, expected " +
+                    $"{w}x{boxHeight}+{descender} with {h}/{v}");
+            if (!font.HasDescenders)
                 throw new AssertionException(
-                    $"{font.Name} reports HasDescenders={font.HasDescenders}, expected {descenders}");
+                    $"{font.Name} reports no descenders despite a {font.DescenderDepth}-row zone");
         }
     }
 
     /// <summary>
-    /// The advertised geometry: a 3x5 glyph on a 4x6 grid, with the spacing between characters
-    /// and not after the last one, so a centered label really is centered.
+    /// The advertised geometry: the horizontal spacing falls between characters and not after the
+    /// last one, so a centered label really is centered, and the descender is counted on every
+    /// measurement whether or not the text has one.
+    ///
+    /// <para>That second half is the one worth pinning. A measurement is what a fit is judged
+    /// against, so a measurement that left the descender out would call "Deep" a fit and then draw
+    /// its tail outside the pixel; and a live label would jump a row as a descender came and went,
+    /// because a centered label is placed from its own measurement.</para>
     /// </summary>
     [GameTest]
     public static void LabelsMeasureToTheAdvertisedGrid()
     {
-        // Small: 3x5 glyphs, 1 spacing. A lone glyph measures its lit area; a second costs a full
-        // advance; a second line costs a line height. The other sizes are the same arithmetic
-        // with their own numbers, which is the whole contract of a bitmap font.
-        Expect(new Vector2I(3, 5), Canvas.MeasureLabel("7"), "one Small character");
-        Expect(new Vector2I(7, 5), Canvas.MeasureLabel("42"), "two Small characters");
-        Expect(new Vector2I(3, 11), Canvas.MeasureLabel("4\n2"), "two Small lines");
+        // Small: a 3x5 box plus 1 descender row, 1 horizontal and 1 vertical spacing. A lone glyph
+        // measures its box and descender; a second costs a full advance; a second line costs a line
+        // height. The other sizes are the same arithmetic with their own numbers, which is the
+        // whole contract of a bitmap font.
+        Expect(new Vector2I(3, 6), Canvas.MeasureLabel("7"), "one Small character");
+        Expect(new Vector2I(7, 6), Canvas.MeasureLabel("42"), "two Small characters");
+        Expect(new Vector2I(3, 12), Canvas.MeasureLabel("4\n2"), "two Small lines");
 
-        // Medium: 5x7 glyphs, 2 spacing.
-        Expect(new Vector2I(5, 7), Canvas.MeasureLabel("7", TextSize.Medium), "one Medium character");
-        Expect(new Vector2I(12, 7), Canvas.MeasureLabel("42", TextSize.Medium), "two Medium characters");
-        Expect(new Vector2I(5, 16), Canvas.MeasureLabel("4\n2", TextSize.Medium), "two Medium lines");
+        // Medium: a 5x7 box plus 1 descender row, 1 and 2 spacing.
+        Expect(new Vector2I(5, 8), Canvas.MeasureLabel("7", TextSize.Medium), "one Medium character");
+        Expect(new Vector2I(11, 8), Canvas.MeasureLabel("42", TextSize.Medium), "two Medium characters");
+        Expect(new Vector2I(5, 17), Canvas.MeasureLabel("4\n2", TextSize.Medium), "two Medium lines");
 
-        // Large: 9x13 glyphs, 3 spacing.
-        Expect(new Vector2I(9, 13), Canvas.MeasureLabel("7", TextSize.Large), "one Large character");
-        Expect(new Vector2I(21, 13), Canvas.MeasureLabel("42", TextSize.Large), "two Large characters");
-        Expect(new Vector2I(9, 29), Canvas.MeasureLabel("4\n2", TextSize.Large), "two Large lines");
+        // Large: a 7x11 box plus 2 descender rows, 1 and 3 spacing.
+        Expect(new Vector2I(7, 13), Canvas.MeasureLabel("7", TextSize.Large), "one Large character");
+        Expect(new Vector2I(15, 13), Canvas.MeasureLabel("42", TextSize.Large), "two Large characters");
+        Expect(new Vector2I(7, 27), Canvas.MeasureLabel("4\n2", TextSize.Large), "two Large lines");
+
+        // A caps-only label and one with a tail measure the same, which is what keeps a live
+        // label's baseline still.
+        Expect(Canvas.MeasureLabel("Top", TextSize.Large), Canvas.MeasureLabel("Typ", TextSize.Large),
+               "a label with a descender against one without");
 
         // Scale multiplies whichever size was named.
-        Expect(new Vector2I(42, 26), Canvas.MeasureLabel("42", TextSize.Large, scale: 2),
+        Expect(new Vector2I(30, 26), Canvas.MeasureLabel("42", TextSize.Large, scale: 2),
                "two Large characters at 2x");
 
         static void Expect(Vector2I want, Vector2I got, string what)
@@ -83,6 +98,50 @@ public static class FontTests
             if (want != got)
                 throw new AssertionException($"{what} should measure {want}, measured {got}");
         }
+    }
+
+    /// <summary>
+    /// Every size really draws below the baseline, and only the characters that should.
+    ///
+    /// <para><b>Nothing else would catch losing it.</b> The descender rows live outside the glyph
+    /// box, so the atlas cell, the region and the destination rect all have to be sized by
+    /// <see cref="PixelFont.DrawnHeight"/> rather than <see cref="PixelFont.GlyphHeight"/>. Size
+    /// any one of them by the box instead and a tail is silently cropped or the whole picture is
+    /// squashed into the box -- the glyph still validates, still measures, still draws, and every
+    /// other test in this file still passes. This is the one that goes red.</para>
+    ///
+    /// <para>Counted out of the built atlas data rather than off the table, so it is the bytes a
+    /// draw would sample, not the strings they came from.</para>
+    /// </summary>
+    [GameTest]
+    public static void EverySizeDrawsBelowTheBaseline()
+    {
+        foreach (var font in PixelFont.BySizeDescending)
+        {
+            foreach (var c in "gjpqy")
+            {
+                if (BelowBaseline(font, c) == 0)
+                    throw new AssertionException(
+                        $"the {font.Name} '{c}' lights nothing in its {font.DescenderDepth}-row " +
+                        "descender zone, so either the glyph folds its tail into the body or the " +
+                        "atlas is being built to the box height and cropping it");
+            }
+
+            // And the other direction, or a font that simply lit every row would pass the above.
+            foreach (var c in "HOxz70")
+            {
+                if (BelowBaseline(font, c) != 0)
+                    throw new AssertionException(
+                        $"the {font.Name} '{c}' has ink below its baseline; only g, j, p, q, y and " +
+                        "a few tails belong there, and a cap that reaches down will collide with " +
+                        "the line beneath it");
+            }
+        }
+
+        // Lit pixels of a character that fall inside the descender zone, which is every row of the
+        // drawn picture from the box height down.
+        static int BelowBaseline(PixelFont font, char c) =>
+            font.LitPixels(c) - font.LitPixelsInBox(c);
     }
 
     /// <summary>
@@ -94,14 +153,14 @@ public static class FontTests
     [GameTest]
     public static void AutoPicksTheLargestSizeThatFits()
     {
-        // "42" needs 21x13 in Large, 12x7 in Medium, 7x5 in Small.
+        // "42" needs 15x13 in Large, 11x8 in Medium, 7x6 in Small.
         Expect(new Vector2(96, 96), PixelFont.Large, "a box with room for anything");
-        Expect(new Vector2(21, 13), PixelFont.Large, "a box that fits Large exactly");
-        Expect(new Vector2(20, 13), PixelFont.Medium, "a box one screen pixel too narrow for Large");
-        Expect(new Vector2(21, 12), PixelFont.Medium, "a box one screen pixel too short for Large");
-        Expect(new Vector2(12, 7), PixelFont.Medium, "a box that fits Medium exactly");
-        Expect(new Vector2(11, 7), PixelFont.Small, "a box one screen pixel too narrow for Medium");
-        Expect(new Vector2(7, 5), PixelFont.Small, "a box that fits Small exactly");
+        Expect(new Vector2(15, 13), PixelFont.Large, "a box that fits Large exactly");
+        Expect(new Vector2(14, 13), PixelFont.Medium, "a box one screen pixel too narrow for Large");
+        Expect(new Vector2(15, 12), PixelFont.Medium, "a box one screen pixel too short for Large");
+        Expect(new Vector2(11, 8), PixelFont.Medium, "a box that fits Medium exactly");
+        Expect(new Vector2(10, 8), PixelFont.Small, "a box one screen pixel too narrow for Medium");
+        Expect(new Vector2(7, 6), PixelFont.Small, "a box that fits Small exactly");
 
         // Nothing fits, and the smallest is drawn anyway: a label spilling past its pixel can still
         // be read, and an empty pixel is indistinguishable from one nobody labelled.
@@ -109,10 +168,10 @@ public static class FontTests
 
         // Scale is part of what has to fit, so raising it steps down through the sizes rather than
         // overflowing.
-        if (PixelFont.LargestFitting("42", new Vector2(21, 13), scale: 2) != PixelFont.Small)
+        if (PixelFont.LargestFitting("42", new Vector2(15, 13), scale: 2) != PixelFont.Small)
             throw new AssertionException(
-                "at 2x, \"42\" needs 42x26 in Large and 24x14 in Medium, so a 21x13 box should " +
-                $"fall to Small; got {PixelFont.LargestFitting("42", new Vector2(21, 13), 2)}");
+                "at 2x, \"42\" needs 30x26 in Large and 22x16 in Medium, so a 15x13 box should " +
+                $"fall to Small; got {PixelFont.LargestFitting("42", new Vector2(15, 13), 2)}");
 
         static void Expect(Vector2 box, PixelFont want, string what)
         {
@@ -126,7 +185,7 @@ public static class FontTests
     /// Every glyph is one connected shape, so no character has a piece floating loose from the
     /// rest of it.
     ///
-    /// <para><b>Written because one did.</b> The 9x13 lowercase 'u' had its bowl and its right
+    /// <para><b>Written because one did.</b> A lowercase 'u' once had its bowl and its right
     /// stem separated by two unlit columns: it validated, it measured correctly, it drew, and it
     /// looked like a broken character. Nothing else here could see that, because every other test
     /// is about the table's shape rather than the letterform's.</para>
@@ -140,13 +199,31 @@ public static class FontTests
     [GameTest]
     public static void EveryGlyphIsOnePiece()
     {
-        // Characters drawn in more than one piece on purpose.
+        // Characters drawn in more than one piece on purpose at every size: a dot over a stem, a
+        // pair of marks, a glyph whose parts never touch.
         var manyPieces = new HashSet<char> { '!', '"', '\'', ':', ';', '?', 'i', 'j', '=', '%', '#' };
+
+        // And characters that only come apart at one size, because that size forced it.
+        //
+        // <para>At three columns a diagonal cannot both read as a diagonal and stay connected: a
+        // stroke that steps one column per row has nowhere to go, so 's' and 'z' step two and
+        // their middles touch nothing. The break is what makes them legible rather than a defect
+        // in them.</para>
+        //
+        // Kept separate from the list above rather than merged into it, so an exemption cannot
+        // spread to a size that did not need it. A broken 'z' at 7x11 has eleven rows to avoid it
+        // in and still fails here, which is the case that would really be a mistake.
+        var manyPiecesAtSize = new Dictionary<string, HashSet<char>>
+        {
+            ["Small"] = new HashSet<char> { 's', 'z' },
+        };
 
         foreach (var font in PixelFont.BySizeDescending)
         foreach (var c in Printable())
         {
             if (manyPieces.Contains(c) || c == ' ')
+                continue;
+            if (manyPiecesAtSize.TryGetValue(font.Name, out var atThisSize) && atThisSize.Contains(c))
                 continue;
 
             var pieces = Pieces(font, c);

@@ -35,13 +35,13 @@ public enum TextSize
     /// </summary>
     Auto,
 
-    /// <summary>3x5 glyphs on a 4x6 grid.</summary>
+    /// <summary>3x5 glyphs with a 1-row descender, on a 4x6 grid.</summary>
     Small,
 
-    /// <summary>5x7 glyphs on a 7x9 grid.</summary>
+    /// <summary>5x7 glyphs with a 1-row descender, on a 6x9 grid.</summary>
     Medium,
 
-    /// <summary>9x13 glyphs on a 12x16 grid, with true descenders.</summary>
+    /// <summary>7x11 glyphs with a 2-row descender, on an 8x14 grid. One-pixel strokes throughout.</summary>
     Large,
 
     /// <summary>

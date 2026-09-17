@@ -1085,7 +1085,7 @@ public sealed class Canvas
 
     /// <summary>The lit width of one line, which is the advance per character less the trailing spacing.</summary>
     private static float LineWidth(PixelFont font, string line, int scale) =>
-        line.Length == 0 ? 0f : (font.Advance * line.Length - font.Spacing) * scale;
+        line.Length == 0 ? 0f : (font.Advance * line.Length - font.HorizontalSpacing) * scale;
 
     /// <summary>
     /// One pass over the whole text: every glyph of every line, in one colour, shifted by
@@ -1103,11 +1103,15 @@ public sealed class Canvas
                 var c = lines[line][i];
                 if (c == ' ')
                     continue;
+                // DrawnHeight, not GlyphHeight: the atlas cell carries the descender rows below
+                // the box, and a dest rect sized to the box alone would squash the whole picture
+                // into it rather than clipping the tail -- a texture rect scales its region to fit.
+                // Every glyph is drawn to the same rect either way, so the baseline does not move.
                 var dest = new Rect2(
                     at.X + i * font.Advance * scale,
                     at.Y,
                     font.GlyphWidth * scale,
-                    font.GlyphHeight * scale);
+                    font.DrawnHeight * scale);
                 RenderingServer.CanvasItemAddTextureRectRegion(_item, dest, atlas, font.Region(c), color);
             }
         }

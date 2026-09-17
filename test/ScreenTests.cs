@@ -437,12 +437,14 @@ public static class ScreenTests
             var measured = Canvas.MeasureLabel("L", TextSize.Large, labelScale);
             var origin = ViewGeometry.ScreenOf(tile) - (Vector2)measured / 2f;
 
-            // Large 'L' is a two-pixel stem down the left with the foot on the baseline, row 9 of
-            // the 13: "##......." nine times over, then "#########".
+            // Large 'L' is a ONE-pixel stem down the left with the foot on the baseline, row 10 of
+            // the 11-row box: "#......" ten times over, then "#######". Rows 11 and 12 are the
+            // descender zone, drawn into the vertical spacing, which an 'L' never reaches.
             Lit(0, 0, "the top of the stem");
+            Dark(1, 0, "the column beside the stem, which is lit only if the stroke is two wide");
             Dark(4, 0, "the top right, which is only lit if the glyph is upside down");
-            Lit(0, 9, "the foot of the stem");
-            Lit(8, 9, "the far end of the foot");
+            Lit(0, 10, "the foot of the stem");
+            Lit(6, 10, "the far end of the foot");
             Dark(4, 4, "the open middle right");
             Dark(4, 11, "the descender zone, which an 'L' does not reach into");
 
