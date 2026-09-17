@@ -93,11 +93,17 @@ public static class LabelLayout
     public const int MaxAutoScale = 4;
 
     /// <summary>
-    /// The most lines a label is ever wrapped across.
+    /// How many lines a label is wrapped across by default.
     ///
-    /// <para>Three is where it stops being a label and starts being a paragraph on a pixel. It is
-    /// also as many as a square pixel has room for at a readable size: at 96 screen pixels, three
-    /// lines of the 5x7 font at twice size is 54 of the 96.</para>
+    /// <para>Three is where a label stops being a label and starts being a paragraph on a pixel.
+    /// It is also as many as a square pixel has room for at a readable size: at 96 screen pixels,
+    /// three lines of the 5x7 font at twice size is 54 of the 96.</para>
+    ///
+    /// <para>A default rather than a ceiling, because it is a judgement about labels in general
+    /// and some callers know better about theirs. Material names run past forty characters, and
+    /// naming one of those whole is worth more than the tidiness three lines buys -- so
+    /// <see cref="Choose(string, string, Vector2, int?, int, int)"/> takes a limit of its
+    /// own.</para>
     /// </summary>
     public const int MaxLines = 3;
 
@@ -128,8 +134,9 @@ public static class LabelLayout
 
     /// <summary>Lays out a mark and a body on the pixel at <paramref name="tile"/>, as it is on screen now.</summary>
     public static FittedText Choose(string mark, string body, Vector2I tile,
-                                    int? scale = null, int maxBody = int.MaxValue) =>
-        Choose(mark, body, ViewGeometry.ScreenRectOf(tile).Size, scale, maxBody);
+                                    int? scale = null, int maxBody = int.MaxValue,
+                                    int maxLines = MaxLines) =>
+        Choose(mark, body, ViewGeometry.ScreenRectOf(tile).Size, scale, maxBody, maxLines);
 
     /// <summary>
     /// Lays out a mark and a body in a box of screen pixels.
@@ -163,10 +170,18 @@ public static class LabelLayout
     /// <see cref="Settings.TextScale"/>.
     /// </param>
     /// <param name="maxBody">The most characters of <paramref name="body"/> ever shown.</param>
+    /// <param name="maxLines">
+    /// The most lines <paramref name="body"/> is wrapped across, defaulting to
+    /// <see cref="MaxLines"/>. Raise it when naming the thing whole matters more than keeping the
+    /// label compact: material names run past forty characters, and three lines cannot hold one.
+    /// Clamped to at least 1, so a caller cannot ask for a label with no lines in it.
+    /// </param>
     public static FittedText Choose(string mark, string body, Vector2 box,
-                                    int? scale = null, int maxBody = int.MaxValue)
+                                    int? scale = null, int maxBody = int.MaxValue,
+                                    int maxLines = MaxLines)
     {
         var userScale = Mathf.Max(1, scale ?? Settings.TextScale);
+        maxLines = Mathf.Max(1, maxLines);
         mark ??= "";
         body ??= "";
 
@@ -184,7 +199,7 @@ public static class LabelLayout
         {
             FittedText? best = null;
 
-            foreach (var text in Arrangements(mark, shown))
+            foreach (var text in Arrangements(mark, shown, maxLines))
             {
                 var measured = Fit(text, room, userScale);
 
@@ -232,7 +247,7 @@ public static class LabelLayout
     /// The ways a mark and a body can be arranged, plainest first, which is what wins when
     /// <see cref="Beats"/> finds nothing to choose between two of them.
     /// </summary>
-    private static IEnumerable<string> Arrangements(string mark, string body)
+    private static IEnumerable<string> Arrangements(string mark, string body, int maxLines)
     {
         if (body.Length == 0)
         {
@@ -242,14 +257,14 @@ public static class LabelLayout
 
         if (mark.Length == 0)
         {
-            foreach (var wrapped in Wrappings(body))
+            foreach (var wrapped in Wrappings(body, maxLines))
                 yield return wrapped;
             yield break;
         }
 
         yield return mark + body;
 
-        foreach (var wrapped in Wrappings(body))
+        foreach (var wrapped in Wrappings(body, maxLines))
             yield return mark + "\n" + wrapped;
     }
 
@@ -261,7 +276,7 @@ public static class LabelLayout
     /// something the pixel does not say. A long single word is cut instead, which at least ends in
     /// a mark that says it was cut.</para>
     /// </summary>
-    private static IEnumerable<string> Wrappings(string body)
+    private static IEnumerable<string> Wrappings(string body, int maxLines)
     {
         yield return body;
 
@@ -269,7 +284,7 @@ public static class LabelLayout
         if (words.Length < 2)
             yield break;
 
-        for (var lines = 2; lines <= Math.Min(MaxLines, words.Length); lines++)
+        for (var lines = 2; lines <= Math.Min(maxLines, words.Length); lines++)
             yield return Balance(words, lines);
     }
 

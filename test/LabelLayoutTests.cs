@@ -106,6 +106,82 @@ public static class LabelLayoutTests
     }
 
     /// <summary>
+    /// A caller can ask for more lines than the default, which is the only way to name a long
+    /// material whole.
+    ///
+    /// <para><b>Why the default is not enough.</b> Material names run past forty characters, and
+    /// three lines of them do not fit a pixel at a readable size, so the layout cuts and the label
+    /// ends in an ellipsis. Naming the thing is sometimes worth more than keeping the label
+    /// compact, and that is a judgement about one caller's labels rather than about labels in
+    /// general -- so <see cref="LabelLayout.MaxLines"/> is a default and this is the override.</para>
+    /// </summary>
+    [GameTest]
+    public static void ACallerCanAskForMoreLinesThanTheDefault()
+    {
+        // Five words, so there is something to wrap; long enough that three lines cannot hold it
+        // in a pixel this size. A real name of this shape is what prompted the parameter.
+        const string longName = "Ammonium Iron Sulfate Dodecahydrate Crystal";
+        var box = new Vector2(72, 96);
+
+        var byDefault = LabelLayout.Choose("", longName, box, scale: 1);
+        var roomier = LabelLayout.Choose("", longName, box, scale: 1, maxLines: 6);
+
+        var defaultLines = byDefault.Text.Split('\n').Length;
+        if (defaultLines > LabelLayout.MaxLines)
+            throw new AssertionException(
+                $"the default laid out {defaultLines} lines, past the {LabelLayout.MaxLines} it " +
+                $"documents: {byDefault}");
+
+        // The premise. If the default already showed the whole name, this test proves nothing
+        // about the override, and it should say so rather than passing quietly.
+        if (!byDefault.Text.Contains(PixelFont.Ellipsis))
+            Harness.Inapplicable(
+                $"a {box} box already holds that name in {LabelLayout.MaxLines} lines ({byDefault}), " +
+                "so there is nothing for more lines to buy; pick a smaller box or a longer name");
+
+        if (roomier.Text.Split('\n').Length <= LabelLayout.MaxLines)
+            throw new AssertionException(
+                $"maxLines: 6 laid out {roomier.Text.Split('\n').Length} line(s), so the limit was " +
+                $"not raised: {roomier}");
+        if (roomier.Text.Contains(PixelFont.Ellipsis))
+            throw new AssertionException(
+                $"the whole name still did not fit in six lines: {roomier}");
+        if (roomier.Text.Replace("\n", " ") != longName)
+            throw new AssertionException(
+                $"six lines showed \"{roomier.Text.Replace("\n", " ")}\" rather than the whole name");
+    }
+
+    /// <summary>
+    /// A limit below one is clamped rather than producing a label with no lines in it, and the
+    /// wrapping rules do not change just because the budget did.
+    /// </summary>
+    [GameTest]
+    public static void AnImpossibleLineLimitIsClamped()
+    {
+        var single = LabelLayout.Choose("", "Carbon Dioxide", new Vector2(96, 96), scale: 1, maxLines: 0);
+
+        if (single.Text.Length == 0)
+            throw new AssertionException("maxLines: 0 laid out nothing at all");
+        if (single.Text.Contains('\n'))
+            throw new AssertionException(
+                $"maxLines: 0 should clamp to one line; it laid out {single}");
+
+        // Raising the budget must not start breaking words, which is the rule a bigger budget
+        // would be most tempting to relax.
+        var many = LabelLayout.Choose("", "Carbon Dioxide", new Vector2(40, 96), scale: 1, maxLines: 8);
+        foreach (var line in many.Text.Split('\n'))
+        {
+            var bare = line.TrimEnd(PixelFont.Ellipsis);
+            if (bare.Length == 0)
+                continue;
+            if (!"Carbon Dioxide".Split(' ').Contains(bare) && bare != "Carbon Dioxide")
+                throw new AssertionException(
+                    $"with eight lines available the line '{bare}' of {many} is not a whole word; " +
+                    "a bigger line budget must not start breaking words");
+        }
+    }
+
+    /// <summary>
     /// Stacking a mark above the body buys a bigger font when the body is what needs the width.
     ///
     /// <para>This is the whole reason the arrangement exists: a square pixel has as much height as
