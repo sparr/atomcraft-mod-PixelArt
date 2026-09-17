@@ -41,7 +41,7 @@ public static class ModEntry
     /// <see cref="PixelArtApi.RequireVersion"/> exists to prevent, and a const would be this mod
     /// handing it out.</para>
     /// </summary>
-    public static readonly string Version = "0.2.0";
+    public static readonly string Version = "0.3.0";
 
     private static Harmony? _harmony;
 

@@ -15,7 +15,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PixelArt</AssemblyName>
     <RootNamespace>PixelArt</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <LangVersion>latest</LangVersion>
     <!-- Read by ModZip.targets for the staging folder, the zip name, and the install name.
          It must match mod.json's "id": the loader requires every file of a mod to sit inside
