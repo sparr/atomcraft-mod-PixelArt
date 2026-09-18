@@ -3,7 +3,7 @@
   "name": "Pixel Art",
   "description": "A drawing layer other mods draw their overlays through: where a world pixel is on screen, and outlines, highlights, direction arrows and bitmap text drawn on it, above the world and above the HUD.",
   "author": "sparr",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "modules": [
     {
       "moduleId": "PixelArt/Main",

@@ -16,7 +16,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PixelArt.Demo</AssemblyName>
     <RootNamespace>PixelArt.Demo</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <LangVersion>latest</LangVersion>
     <ModId>PixelArt.Demo</ModId>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

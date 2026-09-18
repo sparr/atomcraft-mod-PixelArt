@@ -21,7 +21,7 @@ public static class ModEntry
     /// the loader's dependencies carry no version constraint, so without this check a mismatch
     /// surfaces later as a <c>MissingMethodException</c> from inside a frame.
     /// </summary>
-    public const string PixelArtVersion = "0.3";
+    public const string PixelArtVersion = "0.4";
 
     public static void Initialize()
     {

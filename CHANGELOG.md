@@ -2,6 +2,18 @@
 
 Broad strokes only. Each release's notes say more, and the commits say most.
 
+## 0.4.0
+
+Drawing and text, from two requests by a consumer mod. **Breaking for consumers**, so move your `RequireVersion` pin to `"0.4"` : adding an optional parameter changes a method's signature in metadata, so a mod built against 0.3.0 that calls `LabelLayout.Choose` throws `MissingMethodException` until it is rebuilt.
+
+- **`canvas.Clip(rect)`** trims everything drawn inside the scope to a rectangle, covering fills, outlines, shapes, arrows and labels alike. A consumer could already intersect its own rectangle before a fill; it could not trim a shape, an arrow or a label, because those reach the server as a texture region, a polygon and a run of glyph quads. Glyphs are cut mid-glyph, which is what a panel edge should look like. Clipped content draws above unclipped content, whatever order the calls were in.
+- **`LabelLayout` can break inside a word** on request, with `Breaking.Anywhere`. A square cell usually has height going spare that a one-word name on one line cannot use: on a 32-screen-pixel cell `Water` fits a glyph height of 5 where `Wat` over `er` fits 11. Breaking a word is priced rather than free, so it happens when it buys a real size step and not when it buys a little. `Breaking.Words` remains the default and is unchanged byte for byte across 1122 measured layouts.
+- **`LabelLayout.Choose` takes a line budget**, so a forty-character material name can be named whole rather than cut to three lines and an ellipsis.
+- **`LabelLayout.OpticalCenterOffset`** lifts text that has no descender, which otherwise looks low because `Measure` counts the descender on every label to keep a live label's baseline still. For stable text only.
+- **`PixelFont.Descends`** answers whether a character puts ink below the baseline, from the glyph table rather than a list of characters, so it stays right when a face is redrawn.
+- **Fixed: `DrawOutline` threw** on a rectangle under two screen pixels on its shorter side, faulting the whole canvas of any mod outlining a rect whose size it did not choose. It now draws the sliver filled.
+- **Fixed: arrows were blunt half the time.** The apex sat on a pixel corner, where the rasterizer's tie-break resolves differently by orientation, so vertical arrows came to a point and horizontal ones to a two-pixel end. Every aim now gives a one-pixel tip.
+
 ## 0.3.0
 
 New bitmap fonts. **Breaking for consumers**, so move your `RequireVersion` pin to `"0.3"`.
