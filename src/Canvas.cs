@@ -77,6 +77,14 @@ public sealed class Canvas
     /// </summary>
     private const int MarkWarningThreshold = 10_000;
 
+    /// <summary>
+    /// How many clips in one frame is enough to say something. Each one costs a server canvas item
+    /// kept for the life of the canvas, and the case this was built for uses exactly one: a
+    /// consumer reaching dozens is almost certainly clipping inside a per-cell loop, where every
+    /// draw call already sizes itself to the box it is handed and a clip buys nothing.
+    /// </summary>
+    private const int ClipWarningThreshold = 64;
+
     private static readonly List<Canvas> Canvases = new();
 
     /// <summary>
@@ -706,6 +714,46 @@ public sealed class Canvas
     private Rid _item;
 
     /// <summary>
+    /// Children of <see cref="_item"/> that exist only to be clipped. Commands go to one of these
+    /// instead of to <see cref="_item"/> while <see cref="CurrentClip"/> is set.
+    ///
+    /// <para><b>Separate items rather than a flag, and one per clip rather than one in total.</b>
+    /// The server clips an item as a whole: a clip is a property that lives on the item until the
+    /// frame is drawn, not a command in its list. So there is no way to scissor some of one item's
+    /// commands and not others, and -- the part that is easy to get wrong -- no way to turn a clip
+    /// off when a scope ends, because the frame has not been drawn yet. Turning it off at
+    /// <see cref="ClearClip"/> is what the first version of this did, and the clip then never
+    /// applied at all.</para>
+    ///
+    /// <para>One item per clip used in a frame follows from that: a second clip reusing the first
+    /// item would re-point its rectangle, and the content drawn under the first clip would be cut
+    /// to the second one's boundary instead. The pool is reused across frames rather than freed, so
+    /// it settles at the high-water mark of any single frame.</para>
+    /// </summary>
+    private readonly List<Rid> _clipItems = new();
+
+    /// <summary>How many of <see cref="_clipItems"/> have been handed out this frame.</summary>
+    private int _clipsUsed;
+
+    /// <summary>The item the current clip's commands go to, valid only while <see cref="_clip"/> is set.</summary>
+    private Rid _activeClipItem;
+
+    private bool _warnedManyClips;
+
+    private Rect2? _clip;
+
+    /// <summary>
+    /// The rectangle drawing is currently trimmed to, in screen pixels, or null when it is not.
+    ///
+    /// <para>Public so a consumer can tell whether it is inside a clip without tracking that
+    /// itself, and so a test can see the reset happen.</para>
+    /// </summary>
+    public Rect2? CurrentClip => _clip;
+
+    /// <summary>Where a draw call appends: the clipped child while a clip is set, the item itself otherwise.</summary>
+    private Rid Target => _clip.HasValue ? _activeClipItem : _item;
+
+    /// <summary>
     /// Makes sure there is something to draw into, and returns false when there is not: headless,
     /// or before the scene tree is up. Neither is an error worth a log line every frame.
     /// </summary>
@@ -736,21 +784,59 @@ public sealed class Canvas
         // Nearest, so a glyph scaled by a whole number stays a grid of hard-edged blocks.
         RenderingServer.CanvasItemSetDefaultTextureFilter(
             _item, RenderingServer.CanvasItemTextureFilter.Nearest);
+
+        _clipItems.Clear();
+        _clipsUsed = 0;
+        _clip = null;
+        _activeClipItem = default;
         return true;
     }
 
-    /// <summary>Empties this frame's command list without tearing the canvas down.</summary>
+    /// <summary>
+    /// Empties this frame's command list without tearing the canvas down, and drops any clip with
+    /// it.
+    ///
+    /// <para>The clip is per frame on purpose. A pass that throws between setting one and clearing
+    /// it would otherwise leave the canvas trimmed for the rest of the session, and the symptom --
+    /// marks silently missing outside a rectangle nobody remembers setting -- is far harder to
+    /// place than the exception that caused it.</para>
+    /// </summary>
     internal void ClearCommands()
     {
         if (_item.IsValid && _node != null && GodotObject.IsInstanceValid(_node))
+        {
             RenderingServer.CanvasItemClear(_item);
+            foreach (var clipped in _clipItems)
+                if (clipped.IsValid)
+                    RenderingServer.CanvasItemClear(clipped);
+        }
+
+        // The pool is handed out again from the start, not freed: a canvas that clipped once last
+        // frame will clip once this frame, and re-creating the item every frame would churn a
+        // server resource for nothing.
+        _clipsUsed = 0;
+        ClearClip();
     }
 
     private void ReleaseCanvas()
     {
+        // The child first: freeing a parent does not free its children, and a canvas item is a
+        // server resource that nothing else owns. Without this the engine reports a leaked RID at
+        // exit, which is the same bug the comment on _item warns about.
+        // The children first: freeing a parent does not free its children, and a canvas item is a
+        // server resource that nothing else owns. Without this the engine reports a leaked RID at
+        // exit, which is the same bug the comment on _item warns about.
+        foreach (var clipped in _clipItems)
+            if (clipped.IsValid)
+                RenderingServer.FreeRid(clipped);
+        _clipItems.Clear();
+        _clipsUsed = 0;
+        _activeClipItem = default;
+
         if (_item.IsValid)
             RenderingServer.FreeRid(_item);
         _item = default;
+        _clip = null;
         _node = null;
     }
 
@@ -776,12 +862,143 @@ public sealed class Canvas
         PixelFont.ReleaseAll();
     }
 
+    /// <summary>
+    /// Trims everything drawn from here until the clip is cleared to <paramref name="screen"/>,
+    /// and returns a scope that clears it.
+    ///
+    /// <code>
+    /// using (canvas.Clip(panel))
+    /// {
+    ///     // every Draw call here is cut at the panel's edge
+    /// }
+    /// </code>
+    ///
+    /// <para><b>All of them, not just the rectangular ones.</b> A consumer can intersect its own
+    /// rectangle before calling <see cref="DrawFill(Rect2, Color)"/>, and can hand-roll an outline
+    /// as four fills, and that is where it runs out: a shape, an arrow and a label reach the server
+    /// as a texture region, a polygon and a run of glyph quads, none of which a caller can trim
+    /// from outside. That asymmetry is why this belongs here.</para>
+    ///
+    /// <para><b>Glyphs are cut mid-glyph</b>, and shapes mid-shape. That is the point rather than a
+    /// limitation: content running off the edge of a panel is what a panel looks like, and the
+    /// alternative -- dropping whole elements that cross the boundary -- is what a consumer can
+    /// already do for itself, at the cost of reconstructing where each call lands.</para>
+    ///
+    /// <para><b>Cleared at the start of every frame</b>, whatever the last one did. A pass that
+    /// throws between setting a clip and clearing it cannot leave the canvas trimmed forever; the
+    /// scope returned here is belt to that braces.</para>
+    ///
+    /// <para>No nesting. Setting a clip while one is in effect replaces it rather than
+    /// intersecting -- a consumer wanting the intersection can pass it, and the one case this was
+    /// built for clips once, to a panel, and never to anything inside it.</para>
+    ///
+    /// <para><b>Clipped content draws above unclipped content</b>, whatever order the calls were
+    /// made in. A clip is a property of a canvas item rather than a command, so clipped drawing has
+    /// to go to a child item, and a child draws after its parent. Within one clip, and within the
+    /// unclipped drawing, call order is preserved as usual; it is only the two groups that cannot
+    /// interleave. A consumer that needs something over the top of a clipped panel should use a
+    /// second canvas on a higher layer.</para>
+    ///
+    /// <para>Each clip used in a frame costs a server canvas item, kept and reused for the life of
+    /// the canvas. One a frame is the expected shape and what this was built for; dozens will log a
+    /// warning, because a clip inside a per-cell loop is almost always unnecessary -- every draw
+    /// call already sizes itself to the box it is handed.</para>
+    /// </summary>
+    /// <param name="screen">The rectangle to trim to, in screen pixels, unsnapped.</param>
+    public ClipScope Clip(Rect2 screen)
+    {
+        SetClip(screen);
+        return new ClipScope(this);
+    }
+
+    /// <summary>
+    /// Trims drawing to <paramref name="screen"/> until <see cref="ClearClip"/> or the end of the
+    /// frame. <see cref="Clip"/> is the same thing with the clearing attached; prefer it.
+    /// </summary>
+    public void SetClip(Rect2 screen)
+    {
+        if (!EnsureCanvas() || !_item.IsValid)
+            return;
+
+        // An empty or backwards rectangle draws nothing rather than throwing: a consumer computing
+        // one as the intersection of a panel and a cell will produce plenty of them at the rim, and
+        // "nothing is inside it" is the right answer, not an error.
+        var rect = screen.Size.X <= 0f || screen.Size.Y <= 0f
+            ? new Rect2(screen.Position, Vector2.Zero)
+            : screen;
+
+        _activeClipItem = TakeClipItem();
+        _clip = rect;
+        RenderingServer.CanvasItemSetCustomRect(_activeClipItem, true, rect);
+        RenderingServer.CanvasItemSetClip(_activeClipItem, true);
+    }
+
+    /// <summary>
+    /// Stops trimming, so later draw calls go back to the unclipped item. Harmless when nothing was
+    /// clipped.
+    ///
+    /// <para>This does <b>not</b> switch the clip off on the server, and cannot: the frame has not
+    /// been drawn yet, so turning it off here would mean it never applied. It stops routing, and
+    /// the item keeps both its commands and its clip until the frame is over.</para>
+    /// </summary>
+    public void ClearClip()
+    {
+        _clip = null;
+        _activeClipItem = default;
+    }
+
+    /// <summary>
+    /// The next clip item of the pool, creating one if this frame has used more than any frame
+    /// before it.
+    /// </summary>
+    private Rid TakeClipItem()
+    {
+        if (_clipsUsed < _clipItems.Count)
+            return _clipItems[_clipsUsed++];
+
+        var created = RenderingServer.CanvasItemCreate();
+        // Parented to _item so it inherits its transform, and given the same filter, since a
+        // clipped label is still a bitmap font. Note that being a child also puts it ABOVE the
+        // unclipped commands in draw order whatever order they were issued in -- see Clip.
+        RenderingServer.CanvasItemSetParent(created, _item);
+        RenderingServer.CanvasItemSetDefaultTextureFilter(
+            created, RenderingServer.CanvasItemTextureFilter.Nearest);
+        _clipItems.Add(created);
+        _clipsUsed++;
+
+        if (_clipItems.Count >= ClipWarningThreshold && !_warnedManyClips)
+        {
+            _warnedManyClips = true;
+            Log.Warn($"canvas '{Owner}' has used {_clipItems.Count} clips in one frame. Each is a " +
+                     "server canvas item held for the life of the canvas. Clipping once around a " +
+                     "loop costs one; clipping inside it costs one per iteration, and is usually " +
+                     "not needed, since every draw call already sizes itself to the box it is given.");
+        }
+
+        return created;
+    }
+
+    /// <summary>
+    /// What <see cref="Clip"/> returns: clears the clip when it goes out of scope.
+    ///
+    /// <para>A struct so a <c>using</c> in a per-frame pass allocates nothing. The compiler calls
+    /// <see cref="Dispose"/> directly on a known struct type rather than boxing it.</para>
+    /// </summary>
+    public readonly struct ClipScope : IDisposable
+    {
+        private readonly Canvas? _canvas;
+
+        internal ClipScope(Canvas canvas) => _canvas = canvas;
+
+        public void Dispose() => _canvas?.ClearClip();
+    }
+
     /// <summary>Paints a screen rectangle, for this frame only.</summary>
     public void DrawFill(Rect2 screen, Color color)
     {
         if (!_item.IsValid)
             return;
-        RenderingServer.CanvasItemAddRect(_item, Snap(screen), color);
+        RenderingServer.CanvasItemAddRect(Target, Snap(screen), color);
     }
 
     /// <summary>Paints a pixel, for this frame only.</summary>
@@ -811,7 +1028,7 @@ public sealed class Canvas
         var room = Mathf.Floor(Math.Min(r.Size.X, r.Size.Y) / 2f);
         if (room < 1f)
         {
-            RenderingServer.CanvasItemAddRect(_item, r, color);
+            RenderingServer.CanvasItemAddRect(Target, r, color);
             return;
         }
 
@@ -819,10 +1036,10 @@ public sealed class Canvas
 
         // Four rects rather than a polyline: a stroked line straddles its path, so half of it
         // would land on the neighbouring pixel. These sit wholly inside the rectangle.
-        RenderingServer.CanvasItemAddRect(_item, new Rect2(r.Position.X, r.Position.Y, r.Size.X, t), color);
-        RenderingServer.CanvasItemAddRect(_item, new Rect2(r.Position.X, r.End.Y - t, r.Size.X, t), color);
-        RenderingServer.CanvasItemAddRect(_item, new Rect2(r.Position.X, r.Position.Y + t, t, r.Size.Y - 2 * t), color);
-        RenderingServer.CanvasItemAddRect(_item, new Rect2(r.End.X - t, r.Position.Y + t, t, r.Size.Y - 2 * t), color);
+        RenderingServer.CanvasItemAddRect(Target, new Rect2(r.Position.X, r.Position.Y, r.Size.X, t), color);
+        RenderingServer.CanvasItemAddRect(Target, new Rect2(r.Position.X, r.End.Y - t, r.Size.X, t), color);
+        RenderingServer.CanvasItemAddRect(Target, new Rect2(r.Position.X, r.Position.Y + t, t, r.Size.Y - 2 * t), color);
+        RenderingServer.CanvasItemAddRect(Target, new Rect2(r.End.X - t, r.Position.Y + t, t, r.Size.Y - 2 * t), color);
     }
 
     /// <summary>Outlines a pixel, for this frame only.</summary>
@@ -910,7 +1127,7 @@ public sealed class Canvas
             },
         };
 
-        RenderingServer.CanvasItemAddPolygon(_item, points, new[] { color, color, color });
+        RenderingServer.CanvasItemAddPolygon(Target, points, new[] { color, color, color });
     }
 
     /// <summary>
@@ -939,7 +1156,7 @@ public sealed class Canvas
             size.X, size.Y);
 
         RenderingServer.CanvasItemAddTextureRectRegion(
-            _item, dest, shape.Texture.GetRid(), shape.Region, tint);
+            Target, dest, shape.Texture.GetRid(), shape.Region, tint);
     }
 
     /// <summary>How much of a pixel a shape fills, leaving the rest as margin.</summary>
@@ -1054,7 +1271,7 @@ public sealed class Canvas
 
         if (plate is { } behind)
             RenderingServer.CanvasItemAddRect(
-                _item,
+                Target,
                 new Rect2(origin.X - gap, origin.Y - gap, measured.X + 2 * gap, measured.Y + 2 * gap),
                 behind);
 
@@ -1127,7 +1344,7 @@ public sealed class Canvas
                     at.Y,
                     font.GlyphWidth * scale,
                     font.DrawnHeight * scale);
-                RenderingServer.CanvasItemAddTextureRectRegion(_item, dest, atlas, font.Region(c), color);
+                RenderingServer.CanvasItemAddTextureRectRegion(Target, dest, atlas, font.Region(c), color);
             }
         }
     }

@@ -88,6 +88,19 @@ Marks.Clear();
 
 `Fill`, `Outline`, `Arrow`, `Icon` and `Label` each take a `RectInt` as well as a single pixel — retained and `Draw*` alike — and that is one mark rather than one per pixel: a filled region costs a single draw call, an outlined one gets a single border around the whole block rather than a box per pixel, and an arrow or a label is sized to the block rather than to one pixel of it. At the zoom a world starts at a world pixel is about six screen pixels across -- smaller than any glyph -- so reach for the block overloads whenever the thing you are marking is bigger than one pixel.
 
+**Clipping.** `canvas.Clip(rect)` trims everything drawn inside the scope to a rectangle of screen pixels, and unlike a consumer's own containment test it covers *every* draw call, not just the ones whose destination is a rectangle:
+
+```csharp
+using (canvas.Clip(panel))
+{
+    // fills, outlines, shapes, arrows and labels are all cut at the panel's edge
+}
+```
+
+A caller can already intersect its own rectangle before `DrawFill`, and can hand-roll an outline as four fills. It cannot trim a shape, an arrow or a label, because those reach the server as a texture region, a polygon and a run of glyph quads. Glyphs are cut **mid-glyph**, which is the point: content running off the edge of a panel is what a panel looks like.
+
+Three things to know. A clip is cleared at the start of every frame, so a pass that throws mid-clip cannot leave the canvas trimmed forever. Setting a clip while one is in effect replaces it rather than intersecting -- pass the intersection if that is what you want. And clipped content draws **above** unclipped content whatever order the calls were in, because a clip is a property of a canvas item rather than a command, so clipped drawing goes to a child item and a child draws after its parent; put anything that must sit on top on a second canvas at a higher layer.
+
 A **painter** runs for every pixel on screen, every frame, and draws for that frame only. It is the right shape for state that changes as the simulation runs:
 
 ```csharp

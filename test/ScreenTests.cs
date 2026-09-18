@@ -271,6 +271,238 @@ public static class ScreenTests
     }
 
     /// <summary>
+    /// A clip really cuts what is drawn, in the frame, and cuts every kind of draw call.
+    ///
+    /// <para><b>This is the test the feature exists for.</b> A consumer can already trim its own
+    /// fills by intersecting the rectangle first; what it cannot do is trim a label, a shape or an
+    /// arrow, because those reach the server as glyph quads, a texture region and a polygon. So
+    /// this draws a fill and a label straddling the boundary and asserts that both are cut at it --
+    /// the label mid-glyph, which is the whole point.</para>
+    ///
+    /// <para>Reads the render target rather than trusting the server call, because the failure this
+    /// guards against is silent: a clip set on the wrong item, or on an item whose rect the
+    /// commands define, simply does not clip and nothing says so.</para>
+    /// </summary>
+    [GameTest(RequiresDisplay = true)]
+    public static IEnumerator AClipCutsEveryKindOfDrawCall()
+    {
+        yield return Session.Enter("flat");
+        var tile = Anchor();
+        yield return View.LookAt(tile);
+
+        var canvas = Canvas.For(Owner);
+        try
+        {
+            var at = ViewGeometry.ScreenOf(tile);
+            var ink = new Color(1f, 0f, 1f);                 // magenta: nothing in the world is
+
+            // A band 40 wide, and content 120 wide crossing well past its right edge.
+            var left = Mathf.Round(at.X) - 60f;
+            var band = new Rect2(left, Mathf.Round(at.Y) - 20f, 40f, 40f);
+            var wide = new Rect2(left, Mathf.Round(at.Y) - 20f, 120f, 12f);
+
+            canvas.SetPass("clipped", c =>
+            {
+                using (c.Clip(band))
+                {
+                    c.DrawFill(wide, ink);
+                    c.DrawLabel(new Rect2(left, Mathf.Round(at.Y), 120f, 20f),
+                                "MMMMMMMMMMMM", ink, TextSize.Small,
+                                LabelPlacement.TopLeft, scale: 2);
+                }
+            });
+
+            yield return Wait.Frames(3);
+
+            var image = Game.CanvasLayer.GetViewport().GetTexture()?.GetImage();
+            if (image == null || image.GetWidth() == 0)
+                Harness.Inapplicable("the viewport cannot be read back on this renderer");
+            Artifacts.WriteBytes("clip.png", image!.SavePngToBuffer());
+
+            if (canvas.Faulted)
+                throw new AssertionException($"the clipped pass faulted: {canvas.Fault}");
+
+            // Rightmost column of ink anywhere in the band's rows.
+            var rightmost = -1;
+            for (var y = (int)band.Position.Y; y < (int)band.End.Y; y++)
+            for (var x = (int)band.Position.X; x < (int)band.Position.X + 200; x++)
+            {
+                if (x < 0 || y < 0 || x >= image.GetWidth() || y >= image.GetHeight())
+                    continue;
+                if (Distance(image.GetPixel(x, y), ink) <= 0.1f)
+                    rightmost = Math.Max(rightmost, x);
+            }
+
+            if (rightmost < 0)
+                throw new AssertionException(
+                    "no ink reached the frame at all, so this proves nothing about clipping");
+
+            // The content ran to band.End.X + 80. Anything at or past the edge means no clip.
+            var edge = (int)band.End.X;
+            if (rightmost >= edge + 2)
+                throw new AssertionException(
+                    $"ink reached x={rightmost} with the clip's right edge at {edge}: the clip is " +
+                    "not cutting. Every draw call routed to the clipped item, or the item's own " +
+                    "commands are not being scissored.");
+
+            Atomcraft.TestHarness.Log.For(ModEntry.ModId).Event("clip_edge", new()
+            {
+                ["requestedEdge"] = edge,
+                ["rightmostInk"] = rightmost,
+                ["overshoot"] = rightmost - edge + 1,
+            });
+
+            // And with no clip the same content must reach past that edge, or the check above
+            // would pass for a mod that simply drew nothing.
+            canvas.SetPass("unclipped", c => c.DrawFill(wide, ink));
+            yield return Wait.Frames(3);
+
+            var after = Game.CanvasLayer.GetViewport().GetTexture()?.GetImage();
+            var beyond = false;
+            for (var y = (int)band.Position.Y; y < (int)band.End.Y && after != null; y++)
+            for (var x = edge + 4; x < edge + 60; x++)
+            {
+                if (x >= after.GetWidth() || y < 0 || y >= after.GetHeight())
+                    continue;
+                if (Distance(after.GetPixel(x, y), ink) <= 0.1f)
+                    beyond = true;
+            }
+
+            if (!beyond)
+                throw new AssertionException(
+                    "unclipped, the same fill still did not reach past the edge, so the clipped " +
+                    "case proved nothing");
+        }
+        finally
+        {
+            Canvas.Forget(Owner);
+        }
+
+        yield return Session.Leave();
+
+        static float Distance(Color a, Color b) =>
+            Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B);
+    }
+
+    /// <summary>
+    /// Two clips in one frame each cut their own content, rather than the second re-cutting the
+    /// first.
+    ///
+    /// <para><b>The reason the clip items are pooled.</b> A clip lives on a canvas item until the
+    /// frame is drawn, so a second clip reusing the first item would re-point its rectangle and the
+    /// content drawn under the first clip would come out cut to the second one's boundary. Nothing
+    /// about a single-clip test would notice, and the consumer this was built for uses one clip --
+    /// so without this the bug would ship and surface in somebody else's mod.</para>
+    /// </summary>
+    [GameTest(RequiresDisplay = true)]
+    public static IEnumerator TwoClipsInOneFrameDoNotRecutEachOther()
+    {
+        yield return Session.Enter("flat");
+        var tile = Anchor();
+        yield return View.LookAt(tile);
+
+        var canvas = Canvas.For(Owner);
+        try
+        {
+            var at = ViewGeometry.ScreenOf(tile);
+            var ink = new Color(1f, 0f, 1f);
+
+            var top = Mathf.Round(at.Y) - 30f;
+            var leftBand  = new Rect2(Mathf.Round(at.X) - 100f, top, 30f, 20f);
+            var rightBand = new Rect2(Mathf.Round(at.X) - 100f, top + 30f, 70f, 20f);
+
+            canvas.SetPass("two", c =>
+            {
+                // Both fills run far past their band. If the second clip re-pointed the first's
+                // item, the first row would be cut at 70 wide instead of 30.
+                using (c.Clip(leftBand))
+                    c.DrawFill(new Rect2(leftBand.Position, new Vector2(200f, 20f)), ink);
+                using (c.Clip(rightBand))
+                    c.DrawFill(new Rect2(rightBand.Position, new Vector2(200f, 20f)), ink);
+            });
+
+            yield return Wait.Frames(3);
+
+            var image = Game.CanvasLayer.GetViewport().GetTexture()?.GetImage();
+            if (image == null || image.GetWidth() == 0)
+                Harness.Inapplicable("the viewport cannot be read back on this renderer");
+
+            if (canvas.Faulted)
+                throw new AssertionException($"the clipped pass faulted: {canvas.Fault}");
+
+            var narrow = Width(image!, leftBand, ink);
+            var wide = Width(image, rightBand, ink);
+
+            if (narrow != 30 || wide != 70)
+                throw new AssertionException(
+                    $"the two bands measured {narrow} and {wide} wide, expected 30 and 70. Equal " +
+                    "widths mean both clips landed on one item and the later rectangle won.");
+
+            static int Width(Image image, Rect2 band, Color ink)
+            {
+                var y = Mathf.Clamp((int)(band.Position.Y + band.Size.Y / 2f), 0, image.GetHeight() - 1);
+                var lit = 0;
+                for (var x = (int)band.Position.X; x < (int)band.Position.X + 220; x++)
+                {
+                    if (x < 0 || x >= image.GetWidth())
+                        continue;
+                    var c = image.GetPixel(x, y);
+                    if (Math.Abs(c.R - ink.R) + Math.Abs(c.G - ink.G) + Math.Abs(c.B - ink.B) <= 0.1f)
+                        lit++;
+                }
+                return lit;
+            }
+        }
+        finally
+        {
+            Canvas.Forget(Owner);
+        }
+
+        yield return Session.Leave();
+    }
+
+    /// <summary>
+    /// A clip does not survive the frame that set it, even when the pass that set it threw before
+    /// clearing it.
+    ///
+    /// <para>Without this a consumer whose pass faults mid-clip leaves the canvas trimmed for the
+    /// rest of the session, and the symptom -- marks silently missing outside a rectangle nobody
+    /// remembers setting -- is far harder to place than the exception that caused it.</para>
+    /// </summary>
+    [GameTest(RequiresDisplay = true)]
+    public static IEnumerator AClipDoesNotOutliveItsFrame()
+    {
+        yield return Session.Enter("flat");
+        var tile = Anchor();
+        yield return View.LookAt(tile);
+
+        var canvas = Canvas.For(Owner);
+        try
+        {
+            var at = ViewGeometry.ScreenOf(tile);
+
+            canvas.SetPass("throws-mid-clip", c =>
+            {
+                c.SetClip(new Rect2(at.X, at.Y, 10f, 10f));
+                throw new InvalidOperationException("deliberate, after setting a clip");
+            });
+
+            yield return Wait.Frames(3);
+
+            if (canvas.CurrentClip != null)
+                throw new AssertionException(
+                    $"the canvas is still clipped to {canvas.CurrentClip} a frame after the pass " +
+                    "that set it threw; every later mark outside that rectangle is silently gone");
+        }
+        finally
+        {
+            Canvas.Forget(Owner);
+        }
+
+        yield return Session.Leave();
+    }
+
+    /// <summary>
     /// Outlining a rectangle too narrow to have a border and an interior draws it filled, rather
     /// than throwing.
     ///
