@@ -382,6 +382,56 @@ public sealed partial class PixelFont
     public int LitPixels(char c) => LitRows(c, 0, DrawnHeight);
 
     /// <summary>
+    /// Whether <paramref name="c"/> puts any ink below the baseline, in this size.
+    ///
+    /// <para>Answered from the glyph table rather than from a list of characters, so it stays right
+    /// when a face is redrawn, and it differs by size: the comma descends at every size, the
+    /// underscore and Q only in <see cref="Large"/>, and a face that moved a tail back inside its
+    /// box would be reported as not descending without anyone having to remember this.</para>
+    ///
+    /// <para>Cheap after the first call: one pass over the table per size, cached. Unlike
+    /// <see cref="LitPixels"/> this is meant to be usable from a frame.</para>
+    /// </summary>
+    public bool Descends(char c)
+    {
+        var slot = SlotOf(c);
+        if (slot < 0 || DescenderDepth == 0)
+            return false;
+
+        _descends ??= BuildDescenderTable();
+        return slot < _descends.Length && _descends[slot];
+    }
+
+    /// <summary>Whether any character of <paramref name="text"/> descends.</summary>
+    public bool AnyDescends(string text)
+    {
+        foreach (var c in text)
+            if (c != '\n' && Descends(c))
+                return true;
+        return false;
+    }
+
+    private bool[]? _descends;
+
+    private bool[] BuildDescenderTable()
+    {
+        var data = BuildAtlasData();
+        var width = AtlasWidth;
+        var table = new bool[SlotCount];
+
+        for (var slot = 0; slot < table.Length; slot++)
+        for (var y = GlyphHeight; y < DrawnHeight && !table[slot]; y++)
+        for (var x = 0; x < GlyphWidth; x++)
+            if (data[((y * width) + slot * Advance + x) * 4 + 3] != 0)
+            {
+                table[slot] = true;
+                break;
+            }
+
+        return table;
+    }
+
+    /// <summary>
     /// How many pixels of a character are lit <b>inside the box</b>, above the baseline. Subtract
     /// it from <see cref="LitPixels"/> to count what a character puts in the descender zone.
     /// </summary>

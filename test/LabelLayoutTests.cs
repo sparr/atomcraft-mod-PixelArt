@@ -106,6 +106,158 @@ public static class LabelLayoutTests
     }
 
     /// <summary>
+    /// A one-word name can be broken across lines, which is the only way a square cell can show it
+    /// at the size the cell can actually hold.
+    ///
+    /// <para><b>Measured, not asserted in the abstract.</b> "Water" has no space, so under
+    /// <see cref="Breaking.Words"/> it has exactly one arrangement -- itself, on one line -- and is
+    /// limited by being five glyphs across however much height the cell has going spare. On a
+    /// 32-screen-pixel cell that is a glyph height of 5 against the 11 two lines fit.</para>
+    /// </summary>
+    [GameTest]
+    public static void AOneWordNameCanBeBrokenToFillTheCell()
+    {
+        var box = new Vector2(32, 32);
+        var words = LabelLayout.Choose("", "Water", box, scale: 1);
+        var anywhere = LabelLayout.Choose("", "Water", box, scale: 1,
+                                          breaking: Breaking.Anywhere);
+
+        if (anywhere.Text.Replace("\n", "") != "Water")
+            throw new AssertionException($"the whole name should still be shown; got {anywhere}");
+        if (anywhere.Lines < 2)
+            throw new AssertionException(
+                $"a one-word name was not broken at all: {anywhere}. Words gave {words}");
+
+        var wordsSize = words.Font.GlyphHeight * words.Scale;
+        var anySize = anywhere.Font.GlyphHeight * anywhere.Scale;
+        if (anySize <= wordsSize)
+            throw new AssertionException(
+                $"breaking bought nothing: {anywhere} at {anySize} against {words} at {wordsSize}");
+    }
+
+    /// <summary>
+    /// Where a cell is too small for a one-line name, breaking shows the whole name rather than one
+    /// letter and an ellipsis.
+    /// </summary>
+    [GameTest]
+    public static void BreakingShowsAWholeNameWhereCuttingShowedALetter()
+    {
+        var box = new Vector2(16, 16);
+        var cut = LabelLayout.Choose("", "Water", box, scale: 1);
+        var whole = LabelLayout.Choose("", "Water", box, scale: 1, breaking: Breaking.Anywhere);
+
+        if (!cut.Text.Contains(PixelFont.Ellipsis))
+            Harness.Inapplicable(
+                $"a 16px cell now holds that name without cutting ({cut}), so there is nothing for " +
+                "breaking to rescue; pick a smaller cell");
+
+        if (whole.Text.Replace("\n", "") != "Water")
+            throw new AssertionException(
+                $"breaking still did not show the whole name: {whole} against {cut}");
+    }
+
+    /// <summary>
+    /// A broken word is priced, not free: a bigger candidate that breaks a word loses to a smaller
+    /// one that does not, unless it is enough bigger.
+    ///
+    /// <para>The two cases either side of the line, at the default cost of 0.4. "Water" on a
+    /// 40-pixel cell gains 1.571x in glyph size by breaking, which is worth a break; on a 24-pixel
+    /// cell it gains exactly 1.4x, which is not. That the second is a boundary case is deliberate --
+    /// it is where a rule that had stopped being applied at all would show first.</para>
+    ///
+    /// <para><b>What this does not test.</b> The price compounds per break, and that is not
+    /// asserted here because it currently cannot be: across 1771 layouts -- 23 material names by 77
+    /// cell sizes -- compounding and a flat price choose identically. The candidate set is why. When
+    /// two candidates measure the same size the one with fewer breaks wins under any positive
+    /// price, and when they differ there is almost always a one-break candidate between them that
+    /// dominates both. Compounding is kept because it is the defensible policy, not because
+    /// anything here depends on it; see <see cref="LabelLayout.WordSplitCost"/>.</para>
+    /// </summary>
+    [GameTest]
+    public static void BreakingAWordIsPricedRatherThanFree()
+    {
+        var worthIt = LabelLayout.Choose("", "Water", new Vector2(40, 40), scale: 1,
+                                         breaking: Breaking.Anywhere);
+        if (worthIt.WordBreaks != 1)
+            throw new AssertionException(
+                $"a 1.571x size gain is worth one break and was not taken: {worthIt}");
+
+        var notWorthIt = LabelLayout.Choose("", "Water", new Vector2(24, 24), scale: 1,
+                                            breaking: Breaking.Anywhere);
+        if (notWorthIt.WordBreaks != 0)
+            throw new AssertionException(
+                $"a 1.4x size gain is not worth a break at a cost of 0.4, but one was taken: " +
+                $"{notWorthIt}");
+
+        // The premise: a bigger broken candidate really is on offer there, so the assertion above
+        // is the price rejecting it rather than nothing having proposed it.
+        var free = LabelLayout.Choose("", "Water", new Vector2(24, 24), scale: 1,
+                                      breaking: Breaking.Anywhere, wordSplitCost: 0f);
+        if (free.WordBreaks == 0)
+            throw new AssertionException(
+                $"with the cost at 0 a broken candidate should win on size alone; got {free}. " +
+                "Without one, the check above proves nothing.");
+        if (free.Font.GlyphHeight * free.Scale <= notWorthIt.Font.GlyphHeight * notWorthIt.Scale)
+            throw new AssertionException(
+                $"the rejected candidate {free} is not actually bigger than {notWorthIt}, so the " +
+                "price was not what rejected it");
+    }
+
+    /// <summary>
+    /// Wrapping drops the spaces at the ends of lines, and leaves a single line's spacing alone.
+    /// </summary>
+    [GameTest]
+    public static void WrappedLinesCarryNoEdgeSpaces()
+    {
+        foreach (var body in new[] { "Sulfuric Acid", "Carbon Dioxide", "Praseodymium Chloride" })
+        foreach (var cell in new[] { 16, 24, 32, 48, 64 })
+        {
+            var fitted = LabelLayout.Choose("", body, new Vector2(cell, cell), scale: 1,
+                                            breaking: Breaking.Anywhere);
+            var lines = fitted.Text.Split('\n');
+            if (lines.Length < 2)
+                continue;
+
+            foreach (var line in lines)
+                if (line.StartsWith(' ') || line.EndsWith(' '))
+                    throw new AssertionException(
+                        $"the line '{line}' of {fitted} has a space at an end: a leading one is an " +
+                        "indent nobody asked for and a trailing one is a column spent on nothing, " +
+                        "and either can be the column that costs the label a font size");
+        }
+    }
+
+    /// <summary>
+    /// The optical offset lifts text with no descender and leaves text with one alone.
+    /// </summary>
+    [GameTest]
+    public static void OpticalCenteringShiftsOnlyWhatSitsHigh()
+    {
+        foreach (var font in PixelFont.BySizeDescending)
+        {
+            var plain = LabelLayout.OpticalCenterOffset("TOP", font, 1);
+            var tailed = LabelLayout.OpticalCenterOffset("Typ", font, 1);
+
+            if (plain <= 0f)
+                throw new AssertionException(
+                    $"{font.Name} does not shift 'TOP', which has {font.DescenderDepth} empty " +
+                    "row(s) under it in its measured box");
+            if (tailed != 0f)
+                throw new AssertionException(
+                    $"{font.Name} shifted 'Typ' by {tailed}, but its descender rows are ink");
+
+            // Only the last line decides, since earlier lines' tails fall inside the line spacing
+            // that is already counted.
+            if (LabelLayout.OpticalCenterOffset("Typ\nTOP", font, 1) != plain)
+                throw new AssertionException(
+                    $"{font.Name} let a descender on an earlier line change the offset");
+
+            if (LabelLayout.OpticalCenterOffset("TOP", font, 2) != plain * 2f)
+                throw new AssertionException($"{font.Name} did not scale the offset");
+        }
+    }
+
+    /// <summary>
     /// A caller can ask for more lines than the default, which is the only way to name a long
     /// material whole.
     ///

@@ -154,3 +154,31 @@ public readonly struct VisiblePixel
                       Color? outline = null) =>
         Canvas.DrawLabel(Screen, text, color, size, placement, scale, plate, outline);
 }
+
+/// <summary>
+/// Where <see cref="LabelLayout"/> is allowed to break a line.
+/// </summary>
+public enum Breaking
+{
+    /// <summary>
+    /// Only at spaces. A word is never cut, and a body with no space in it has exactly one
+    /// arrangement: itself, on one line.
+    /// </summary>
+    Words,
+
+    /// <summary>
+    /// Inside a word when that buys a bigger font.
+    ///
+    /// <para><b>What it is for.</b> A cell is square, and a one-word name laid out on one line is
+    /// constrained by its own length rather than by the cell: "Water" is five glyphs across
+    /// whatever the cell's height is going spare. Measured on a 32-screen-pixel cell, one line of
+    /// "Water" fits a glyph height of 5 where "Wat" over "er" fits 11, and on a 16-pixel cell the
+    /// one-line rule gives up entirely and shows "W" and an ellipsis where two lines show the whole
+    /// name.</para>
+    ///
+    /// <para>Breaking a word is still worth avoiding -- "Praseo" over "dymium" is two fragments
+    /// that each read as a word -- so it is priced rather than free; see the
+    /// <c>wordSplitCost</c> parameter of <see cref="LabelLayout.Choose(string, string, Godot.Vector2, int?, int, int, Breaking, float)"/>.</para>
+    /// </summary>
+    Anywhere,
+}

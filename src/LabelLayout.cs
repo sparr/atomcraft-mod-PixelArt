@@ -17,12 +17,13 @@ namespace PixelArt;
 /// </summary>
 public readonly struct FittedText
 {
-    internal FittedText(string text, PixelFont font, int scale, bool overflows)
+    internal FittedText(string text, PixelFont font, int scale, bool overflows, int wordBreaks = 0)
     {
         Text = text;
         Font = font;
         Scale = scale;
         Overflows = overflows;
+        WordBreaks = wordBreaks;
     }
 
     /// <summary>The text as it should be drawn, newlines and all. May be shorter than what was asked for.</summary>
@@ -40,6 +41,15 @@ public readonly struct FittedText
     /// </summary>
     public bool Overflows { get; }
 
+    /// <summary>
+    /// How many words this layout cut across a line boundary. Always 0 under
+    /// <see cref="Breaking.Words"/>.
+    ///
+    /// <para>A count rather than a flag because breaking two words costs a reader more than
+    /// breaking one, and <see cref="LabelLayout"/> prices it that way.</para>
+    /// </summary>
+    public int WordBreaks { get; }
+
     /// <summary>Whether there is anything to draw.</summary>
     public bool IsEmpty => string.IsNullOrEmpty(Text);
 
@@ -50,7 +60,8 @@ public readonly struct FittedText
     public int Lines => Text.Count(c => c == '\n') + 1;
 
     public override string ToString() =>
-        $"'{Text.Replace("\n", "\\n")}' {Font.Name} x{Scale}{(Overflows ? " overflowing" : "")}";
+        $"'{Text.Replace("\n", "\\n")}' {Font.Name} x{Scale}" +
+        $"{(WordBreaks > 0 ? $" {WordBreaks} broken" : "")}{(Overflows ? " overflowing" : "")}";
 }
 
 /// <summary>
@@ -108,6 +119,35 @@ public static class LabelLayout
     public const int MaxLines = 3;
 
     /// <summary>
+    /// What one broken word costs, as a fraction of glyph size, when
+    /// <see cref="Breaking.Anywhere"/> is in effect.
+    ///
+    /// <para>A split candidate wins only if it is more than <c>(1 + cost) ^ breaks</c> times the
+    /// glyph size of the best candidate that broke no word. Compounding per broken word rather than
+    /// applying once is what makes the rule work at all: cutting one word to gain a size is often
+    /// right, and cutting two to gain the same size is usually not.</para>
+    ///
+    /// <para><b>0.4 is fitted, not picked.</b> The consumer that asked for this stated a preference
+    /// for five concrete cases, and a flat ratio cannot satisfy them -- "Water" on a 40-pixel cell
+    /// wants the split at a size ratio of 1.571 and "Carbon Dioxide" on a 48-pixel cell wants the
+    /// word kept at the same 1.571, the difference being that the second breaks two words where the
+    /// first breaks one. Pricing per break leaves a window of (0.400, 0.571); 0.4 sits at its edge
+    /// and satisfies every case, with "Water" on a 24-pixel cell landing exactly on the boundary
+    /// and coming out unbroken, as asked.</para>
+    ///
+    /// <para>0 disables the preference, and size decides alone.</para>
+    ///
+    /// <para><b>The compounding is currently indistinguishable from a flat price.</b> Measured
+    /// across 1771 layouts -- 23 material names by 77 cell sizes -- pricing per break and pricing
+    /// once choose identically at this cost. The candidate set is why: two candidates of equal size
+    /// are separated by break count under any positive price, and where sizes differ there is
+    /// almost always a one-break candidate between them that dominates both. It is written to
+    /// compound because that is the defensible policy and because the candidate generator may grow
+    /// -- not because anything measured today depends on it.</para>
+    /// </summary>
+    public const float WordSplitCost = 0.4f;
+
+    /// <summary>
     /// Clearance kept inside the pixel, as a fraction of it, so a label is never flush against the
     /// edge and stays distinguishable from an arrow on the same pixel.
     /// </summary>
@@ -132,11 +172,49 @@ public static class LabelLayout
         return new Vector2(box.X - 2f * margin, box.Y - 2f * margin);
     }
 
+    /// <summary>
+    /// How far down to shift a centred label so its ink looks centred, in screen pixels.
+    ///
+    /// <para><b>Why a label needs it.</b> <see cref="PixelFont.Measure"/> counts the descender on
+    /// every label whether or not the text has one, deliberately: a fit has to be judged against
+    /// the room a tail would need, and a live label whose text changes must not jump a row when a
+    /// descender appears. The cost is that text with no descender has empty rows at the bottom of
+    /// its measured box, so centring the box leaves the ink sitting high -- by a whole row in
+    /// <see cref="PixelFont.Large"/> at scale 1, and more when magnified.</para>
+    ///
+    /// <para><b>Use it on text that does not change.</b> This reintroduces exactly the
+    /// content-dependence that was kept out of <c>Measure</c>: a label reading "Top" shifts and one
+    /// reading "Typ" does not, so a readout whose text changes under it would twitch by half a
+    /// descender as words came and went. For those, either skip this or apply half of it
+    /// unconditionally -- a constant offset cannot twitch, and splits the error between the two
+    /// cases instead of getting one of them exactly right.</para>
+    /// </summary>
+    public static float OpticalCenterOffset(string text, PixelFont font, int scale)
+    {
+        if (string.IsNullOrEmpty(text) || font.DescenderDepth == 0)
+            return 0f;
+
+        // Only the last line's descender adds to the measured height: every earlier line's tail
+        // falls inside the line spacing that is already counted. So it is the last line that
+        // decides whether those rows are ink or air.
+        var lastBreak = text.LastIndexOf('\n');
+        var lastLine = lastBreak < 0 ? text : text[(lastBreak + 1)..];
+
+        return font.AnyDescends(lastLine) ? 0f : font.DescenderDepth * scale / 2f;
+    }
+
+    /// <summary>How far down to shift a fitted label so its ink looks centred, in screen pixels.</summary>
+    public static float OpticalCenterOffset(in FittedText fitted) =>
+        OpticalCenterOffset(fitted.Text, fitted.Font, fitted.Scale);
+
     /// <summary>Lays out a mark and a body on the pixel at <paramref name="tile"/>, as it is on screen now.</summary>
     public static FittedText Choose(string mark, string body, Vector2I tile,
                                     int? scale = null, int maxBody = int.MaxValue,
-                                    int maxLines = MaxLines) =>
-        Choose(mark, body, ViewGeometry.ScreenRectOf(tile).Size, scale, maxBody, maxLines);
+                                    int maxLines = MaxLines,
+                                    Breaking breaking = Breaking.Words,
+                                    float wordSplitCost = WordSplitCost) =>
+        Choose(mark, body, ViewGeometry.ScreenRectOf(tile).Size, scale, maxBody, maxLines,
+               breaking, wordSplitCost);
 
     /// <summary>
     /// Lays out a mark and a body in a box of screen pixels.
@@ -176,12 +254,26 @@ public static class LabelLayout
     /// label compact: material names run past forty characters, and three lines cannot hold one.
     /// Clamped to at least 1, so a caller cannot ask for a label with no lines in it.
     /// </param>
+    /// <param name="breaking">
+    /// Whether a line may be broken inside a word. <see cref="Breaking.Words"/>, the default, is
+    /// the behaviour every existing caller has: a body with no space in it gets exactly one
+    /// arrangement, itself on one line, and is therefore limited by its own length rather than by
+    /// the cell it has to fit.
+    /// </param>
+    /// <param name="wordSplitCost">
+    /// What one broken word costs, as a fraction of glyph size; see <see cref="WordSplitCost"/>.
+    /// 0 disables the preference and lets size decide alone. Ignored under
+    /// <see cref="Breaking.Words"/>, where nothing breaks a word.
+    /// </param>
     public static FittedText Choose(string mark, string body, Vector2 box,
                                     int? scale = null, int maxBody = int.MaxValue,
-                                    int maxLines = MaxLines)
+                                    int maxLines = MaxLines,
+                                    Breaking breaking = Breaking.Words,
+                                    float wordSplitCost = WordSplitCost)
     {
         var userScale = Mathf.Max(1, scale ?? Settings.TextScale);
         maxLines = Mathf.Max(1, maxLines);
+        wordSplitCost = Mathf.Max(0f, wordSplitCost);
         mark ??= "";
         body ??= "";
 
@@ -199,9 +291,9 @@ public static class LabelLayout
         {
             FittedText? best = null;
 
-            foreach (var text in Arrangements(mark, shown, maxLines))
+            foreach (var text in Arrangements(mark, shown, maxLines, breaking))
             {
-                var measured = Fit(text, room, userScale);
+                var measured = Fit(text, room, userScale, CountWordBreaks(shown, text));
 
                 // Remembered from the very first candidate tried: the whole label, on one line. If
                 // nothing ever fits, that is the best thing to overflow with -- one line spilling
@@ -210,7 +302,7 @@ public static class LabelLayout
 
                 if (measured.Overflows)
                     continue;
-                if (best == null || Beats(measured, best.Value))
+                if (best == null || Beats(measured, best.Value, wordSplitCost))
                     best = measured;
             }
 
@@ -234,10 +326,25 @@ public static class LabelLayout
     /// <para>Strictly better on both counts, so an arrangement that ties on size and width keeps
     /// whichever came first, and <see cref="Arrangements"/> yields the plainest first.</para>
     /// </summary>
-    private static bool Beats(in FittedText candidate, in FittedText best)
+    private static bool Beats(in FittedText candidate, in FittedText best, float wordSplitCost)
     {
         var size = candidate.Font.GlyphHeight * candidate.Scale;
         var bestSize = best.Font.GlyphHeight * best.Scale;
+
+        // A broken word is priced rather than forbidden. Whichever candidate breaks fewer words is
+        // held to be worth (1 + cost) per break it saved, so the one that breaks more has to be
+        // that much larger to win. With equal break counts this is exactly the old comparison, so
+        // Breaking.Words -- where every candidate scores 0 -- is unaffected.
+        if (wordSplitCost > 0f && candidate.WordBreaks != best.WordBreaks)
+        {
+            var fewer = Math.Min(candidate.WordBreaks, best.WordBreaks);
+            var demanded = Mathf.Pow(1f + wordSplitCost,
+                                     Math.Abs(candidate.WordBreaks - best.WordBreaks));
+            return candidate.WordBreaks == fewer
+                ? size * demanded > bestSize    // candidate breaks fewer: it may be smaller
+                : size > bestSize * demanded;   // candidate breaks more: it must be larger
+        }
+
         if (size != bestSize)
             return size > bestSize;
         return candidate.Size.X < best.Size.X;
@@ -247,7 +354,8 @@ public static class LabelLayout
     /// The ways a mark and a body can be arranged, plainest first, which is what wins when
     /// <see cref="Beats"/> finds nothing to choose between two of them.
     /// </summary>
-    private static IEnumerable<string> Arrangements(string mark, string body, int maxLines)
+    private static IEnumerable<string> Arrangements(string mark, string body, int maxLines,
+                                                   Breaking breaking)
     {
         if (body.Length == 0)
         {
@@ -257,14 +365,14 @@ public static class LabelLayout
 
         if (mark.Length == 0)
         {
-            foreach (var wrapped in Wrappings(body, maxLines))
+            foreach (var wrapped in Wrappings(body, maxLines, breaking))
                 yield return wrapped;
             yield break;
         }
 
         yield return mark + body;
 
-        foreach (var wrapped in Wrappings(body, maxLines))
+        foreach (var wrapped in Wrappings(body, maxLines, breaking))
             yield return mark + "\n" + wrapped;
     }
 
@@ -276,9 +384,16 @@ public static class LabelLayout
     /// something the pixel does not say. A long single word is cut instead, which at least ends in
     /// a mark that says it was cut.</para>
     /// </summary>
-    private static IEnumerable<string> Wrappings(string body, int maxLines)
+    private static IEnumerable<string> Wrappings(string body, int maxLines, Breaking breaking)
     {
         yield return body;
+
+        if (breaking == Breaking.Anywhere)
+        {
+            foreach (var wrapped in AnywhereWrappings(body, maxLines))
+                yield return wrapped;
+            yield break;
+        }
 
         var words = body.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length < 2)
@@ -286,6 +401,121 @@ public static class LabelLayout
 
         for (var lines = 2; lines <= Math.Min(maxLines, words.Length); lines++)
             yield return Balance(words, lines);
+    }
+
+    /// <summary>
+    /// Every way to break a body across lines at a given column width, for every line count and
+    /// every width worth trying, narrowest first.
+    ///
+    /// <para><b>Widths, not split points.</b> A twenty-character name into three lines has 171
+    /// choices of where to cut, almost all of them nonsense, and that is before multiplying by the
+    /// body lengths the caller's ladder already tries. Enumerating widths instead is linear in the
+    /// body's length, and it yields the balanced answer first because it starts at the narrowest
+    /// width that could possibly hold the text.</para>
+    ///
+    /// <para>Each width is filled greedily, preferring a space and cutting mid-word only when the
+    /// next word will not fit. So a body that <i>can</i> be wrapped at spaces at some width still
+    /// is, and the split candidates appear alongside rather than instead.</para>
+    /// </summary>
+    private static IEnumerable<string> AnywhereWrappings(string body, int maxLines)
+    {
+        if (body.Length < 2)
+            yield break;
+
+        var seen = new HashSet<string>();
+        var longest = body.Length;
+
+        for (var lines = 2; lines <= maxLines; lines++)
+        {
+            // Narrower than this cannot hold the text in this many lines however it is cut.
+            var narrowest = (body.Length + lines - 1) / lines;
+            for (var width = narrowest; width < longest; width++)
+            {
+                var packed = PackAnywhere(body, width, lines);
+                if (packed == null)
+                    continue;
+                if (seen.Add(packed))
+                    yield return packed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fills lines no wider than <paramref name="width"/>, breaking at a space where one is
+    /// available and cutting a word where one is not. Null when it needs more than
+    /// <paramref name="maxLines"/>.
+    ///
+    /// <para>Leading and trailing spaces are dropped from every line. A line that begins with one
+    /// has spent a column on an indent nobody asked for, and a line that ends with one has spent a
+    /// column on nothing at all -- either can be the column that costs the label a font size. A
+    /// single unwrapped line keeps whatever spacing it was given, since that is the caller's text
+    /// rather than this method's arithmetic.</para>
+    /// </summary>
+    private static string? PackAnywhere(string body, int width, int maxLines)
+    {
+        var lines = new List<string>();
+        var rest = body.AsSpan();
+
+        while (!rest.IsEmpty)
+        {
+            rest = rest.TrimStart(' ');
+            if (rest.IsEmpty)
+                break;
+
+            if (lines.Count == maxLines)
+                return null;
+
+            if (rest.Length <= width)
+            {
+                lines.Add(rest.TrimEnd(' ').ToString());
+                break;
+            }
+
+            // Prefer the last space that fits, so a word survives whole when it can.
+            var take = width;
+            var space = rest[..(width + 1)].LastIndexOf(' ');
+            if (space > 0)
+                take = space;
+
+            lines.Add(rest[..take].TrimEnd(' ').ToString());
+            rest = rest[take..];
+        }
+
+        return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// How many words a layout cut across a line boundary, by comparing its lines against the
+    /// words of the body it came from.
+    ///
+    /// <para>A break is a line that does not end at a word boundary: its last character and the
+    /// next line's first are both non-space in the original. Counted from the text rather than
+    /// tracked through the packer, so it is right for a candidate from any source -- including the
+    /// unwrapped body and the space-wrapped ones, which score 0 by construction.</para>
+    /// </summary>
+    private static int CountWordBreaks(string body, string laidOut)
+    {
+        var lines = laidOut.Split('\n');
+        if (lines.Length < 2)
+            return 0;
+
+        // Walk the body, consuming each line's characters, and look at what sits between them.
+        var breaks = 0;
+        var at = 0;
+        for (var i = 0; i < lines.Length - 1; i++)
+        {
+            at = body.IndexOf(lines[i], at, StringComparison.Ordinal);
+            if (at < 0)
+                return breaks;
+            at += lines[i].Length;
+
+            // A word was cut if the character that follows what this line showed is not a space
+            // and the line did not end at the body's end.
+            if (at < body.Length && body[at] != ' ' && lines[i].Length > 0)
+                breaks++;
+        }
+
+        return breaks;
     }
 
     /// <summary>
@@ -384,7 +614,7 @@ public static class LabelLayout
     /// what to say and which font says it, and the player's multiplier is applied to the result --
     /// which may push it past the pixel, because that is what asking for bigger text means.</para>
     /// </summary>
-    private static FittedText Fit(string text, Vector2 room, int userScale)
+    private static FittedText Fit(string text, Vector2 room, int userScale, int wordBreaks = 0)
     {
         // Nothing to draw trivially fits, and says so: the alternative is reporting an empty
         // label as overflowing, which would make "show the mark alone" look impossible.
@@ -393,7 +623,7 @@ public static class LabelLayout
 
         var (font, scale) = PixelFont.FitToBox(text, room, MaxAutoScale);
         return scale < 1
-            ? new FittedText(text, PixelFont.Small, userScale, overflows: true)
-            : new FittedText(text, font, scale * userScale, overflows: false);
+            ? new FittedText(text, PixelFont.Small, userScale, overflows: true, wordBreaks)
+            : new FittedText(text, font, scale * userScale, overflows: false, wordBreaks);
     }
 }
