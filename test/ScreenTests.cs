@@ -271,6 +271,69 @@ public static class ScreenTests
     }
 
     /// <summary>
+    /// Outlining a rectangle too narrow to have a border and an interior draws it filled, rather
+    /// than throwing.
+    ///
+    /// <para><b>Reported by a consumer, and it faulted their whole canvas.</b> The thickness was
+    /// picked with <c>Mathf.Clamp(round(thickness), 1, floor(min(size) / 2))</c>, whose maximum
+    /// falls to 0 the moment the shorter side is under two screen pixels -- and a clamp whose
+    /// maximum is below its minimum throws <c>ArgumentException</c> rather than clamping. Any
+    /// consumer outlining a rect whose size it did not choose can reach it: a cell at the edge of a
+    /// clipped panel is exactly that.</para>
+    ///
+    /// <para>Filled rather than skipped, because a consumer that asked for an outline wants to see
+    /// the rectangle. At one screen pixel across, an outline of it and a fill of it are the same
+    /// picture anyway.</para>
+    ///
+    /// <para>Runs from a pass so it goes through the real per-frame path, which is where the
+    /// consumer hit it: <see cref="Canvas.Faulted"/> is what a throw in a pass turns into, and
+    /// asserting on that rather than catching here is what makes this the consumer's case.</para>
+    /// </summary>
+    [GameTest(RequiresDisplay = true)]
+    public static IEnumerator AnOutlineTooNarrowToBorderIsFilledNotThrown()
+    {
+        yield return Session.Enter("flat");
+        var tile = Anchor();
+        yield return View.LookAt(tile);
+
+        var canvas = Canvas.For(Owner);
+        try
+        {
+            var at = ViewGeometry.ScreenOf(tile);
+            var drawn = 0;
+
+            // Slivers on both axes and a degenerate one, since the clamp reads the SHORTER side and
+            // a fix that looked at only one of them would pass half of these.
+            canvas.SetPass("slivers", c =>
+            {
+                drawn++;
+                c.DrawOutline(new Rect2(at.X, at.Y, 1f, 40f), Colors.Magenta);      // tall and thin
+                c.DrawOutline(new Rect2(at.X + 4f, at.Y, 40f, 1f), Colors.Magenta); // short and wide
+                c.DrawOutline(new Rect2(at.X + 8f, at.Y, 3f, 3f), Colors.Magenta);  // just under
+                c.DrawOutline(new Rect2(at.X + 12f, at.Y, 0f, 0f), Colors.Magenta); // degenerate
+                c.DrawOutline(new Rect2(at.X + 16f, at.Y, 40f, 40f), Colors.Magenta, thickness: 99f);
+            });
+
+            yield return Wait.Frames(3);
+
+            if (drawn == 0)
+                throw new AssertionException("the pass never ran, so nothing was exercised");
+            if (canvas.Faulted)
+                throw new AssertionException(
+                    "outlining a sliver faulted the canvas, which is what a consumer reported: " +
+                    canvas.Fault);
+            if (PixelArtApi.Faulted)
+                throw new AssertionException($"it took the shared pass down too: {PixelArtApi.Fault}");
+        }
+        finally
+        {
+            Canvas.Forget(Owner);
+        }
+
+        yield return Session.Leave();
+    }
+
+    /// <summary>
     /// A pass may register a canvas while the frame is being drawn, which is what a mod that
     /// creates one lazily does on the frame it first has something to say.
     ///

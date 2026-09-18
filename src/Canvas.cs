@@ -797,10 +797,25 @@ public sealed class Canvas
             return;
 
         var r = Snap(screen);
-        // At least one screen pixel, and never more than half the box: past that the two side bars
-        // would be asked for a negative height, and a thick outline on a small pixel is a filled
-        // pixel anyway.
-        var t = Mathf.Clamp(Mathf.Round(thickness), 1f, Mathf.Floor(Math.Min(r.Size.X, r.Size.Y) / 2f));
+
+        // Never more than half the box: past that the two side bars would be asked for a negative
+        // height. Below one, there is no half to work with -- the box is a sliver one or two screen
+        // pixels across, with no room for a border and an interior both -- and an outline of it is
+        // a filled sliver. Draw that rather than throwing or drawing nothing.
+        //
+        // Written as a floor-then-test rather than a Clamp because that is the bug this replaces:
+        // Mathf.Clamp(1, 1, 0) throws ArgumentException, and a box under two screen pixels on its
+        // shorter side makes the maximum 0 while the minimum stays 1. It is reachable by any
+        // consumer outlining a rect whose size it did not choose -- a cell at the edge of a clip,
+        // say -- and it faulted the whole canvas of the mod that found it.
+        var room = Mathf.Floor(Math.Min(r.Size.X, r.Size.Y) / 2f);
+        if (room < 1f)
+        {
+            RenderingServer.CanvasItemAddRect(_item, r, color);
+            return;
+        }
+
+        var t = Mathf.Clamp(Mathf.Round(thickness), 1f, room);
 
         // Four rects rather than a polyline: a stroked line straddles its path, so half of it
         // would land on the neighbouring pixel. These sit wholly inside the rectangle.
