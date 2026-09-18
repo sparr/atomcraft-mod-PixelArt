@@ -1094,8 +1094,18 @@ public sealed class Canvas
     /// </summary>
     private void Triangle(Rect2 r, Aim aim, float apexInset, float reach, Color color)
     {
-        var midX = Mathf.Round(r.Position.X + r.Size.X / 2f);
-        var midY = Mathf.Round(r.Position.Y + r.Size.Y / 2f);
+        // The centre line runs through the MIDDLE of a pixel, not along its edge. Rounding to a
+        // whole number puts the apex on a pixel corner, and a corner is where the two neighbouring
+        // pixel centres both land exactly on the triangle's edge: with the base as wide as it is
+        // deep, coverage at the tip row reaches exactly half a pixel either side. Whether an edge
+        // pixel counts as covered is then the rasterizer's tie-break, which resolves differently
+        // depending on which way the two edges approach the apex -- so vertical arrows came to a
+        // one-pixel point and horizontal ones to a blunt two-pixel one.
+        //
+        // Half a pixel over, the tie is gone rather than resolved: the centre the apex sits on is
+        // strictly inside the triangle and both its neighbours are strictly outside, for every aim.
+        var midX = Mathf.Floor(r.Position.X + r.Size.X / 2f) + 0.5f;
+        var midY = Mathf.Floor(r.Position.Y + r.Size.Y / 2f) + 0.5f;
         var near = apexInset;
         var far = apexInset + reach;
 

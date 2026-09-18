@@ -503,6 +503,119 @@ public static class ScreenTests
     }
 
     /// <summary>
+    /// Every arrow comes to a one-pixel point, whichever way it aims.
+    ///
+    /// <para><b>They did not.</b> The apex went at <c>Mathf.Round(centre)</c>, a whole number --
+    /// which is a pixel <i>corner</i>, since pixel centres sit at halves. So the tip straddled the
+    /// boundary between two columns or two rows, and whether one or both got filled was left to the
+    /// rasterizer's fill rule, which tie-breaks differently depending on which way the triangle's
+    /// edges approach that corner. Vertical arrows came out pointed and horizontal ones blunt.</para>
+    ///
+    /// <para>Counted out of the rendered frame, one aim at a time on a pixel of its own, because
+    /// the whole defect lives in rasterization and nothing about the geometry the code computes
+    /// shows it.</para>
+    /// </summary>
+    [GameTest(RequiresDisplay = true)]
+    public static IEnumerator EveryArrowComesToAOnePixelPoint()
+    {
+        yield return Session.Enter("flat");
+        var tile = Anchor();
+        yield return View.LookAt(tile);
+
+        var canvas = Canvas.For(Owner);
+        var restore = View.MaxZoomFactor;
+        try
+        {
+            View.MaxZoomFactor = 8;
+            yield return View.SetZoom(View.GameMaxZoom * 8f);
+
+            var ink = new Color(1f, 0f, 1f);
+            var report = new List<string>();
+
+            // Both an odd and an even box: the apex is derived from the box's centre, so a size
+            // of each parity puts it on a different half of a pixel, and a fix that worked for only
+            // one of them would pass a test that tried only one.
+            foreach (var (aim, side) in
+                     from a in new[] { Aim.Up, Aim.Down, Aim.Left, Aim.Right }
+                     from sz in new[] { 41f, 40f }
+                     select (a, sz))
+            {
+                var at = ViewGeometry.ScreenOf(tile);
+                var box = new Rect2(Mathf.Round(at.X) - 60f, Mathf.Round(at.Y) - 60f, side, side);
+
+                canvas.SetPass("arrow", c => c.DrawArrow(box, aim, ink));
+                yield return Wait.Frames(3);
+
+                var image = Game.CanvasLayer.GetViewport().GetTexture()?.GetImage();
+                if (image == null || image.GetWidth() == 0)
+                    Harness.Inapplicable("the viewport cannot be read back on this renderer");
+
+                // The tip row (Up/Down) or column (Left/Right): the first line, scanning from the
+                // apex end, that has any ink in it. Its run length is the width of the point.
+                var tipRun = TipRun(image!, box, aim, ink);
+                report.Add($"{aim}@{side}={tipRun}");
+
+                if (tipRun == 0)
+                    throw new AssertionException(
+                        $"no arrow ink at all for {aim} in a {side}px box, so this measured nothing");
+                if (tipRun != 1)
+                    throw new AssertionException(
+                        $"the {aim} arrow's tip in a {side}px box is {tipRun} pixels across, not 1. " +
+                        "Measured: " +
+                        string.Join(" ", report));
+            }
+
+            Atomcraft.TestHarness.Log.For(ModEntry.ModId).Event("arrow_tips", new()
+            {
+                ["widths"] = string.Join(" ", report),
+            });
+        }
+        finally
+        {
+            View.MaxZoomFactor = restore;
+            Canvas.Forget(Owner);
+        }
+
+        yield return Session.Leave();
+
+        // Length of the lit run on the first line that has any, scanning inward from the apex edge.
+        static int TipRun(Image image, Rect2 box, Aim aim, Color ink)
+        {
+            var x0 = Math.Max(0, (int)box.Position.X);
+            var y0 = Math.Max(0, (int)box.Position.Y);
+            var x1 = Math.Min(image.GetWidth() - 1, (int)box.End.X);
+            var y1 = Math.Min(image.GetHeight() - 1, (int)box.End.Y);
+
+            bool Lit(int x, int y)
+            {
+                var c = image.GetPixel(x, y);
+                return Math.Abs(c.R - ink.R) + Math.Abs(c.G - ink.G) + Math.Abs(c.B - ink.B) <= 0.35f;
+            }
+
+            if (aim is Aim.Up or Aim.Down)
+            {
+                var rows = Enumerable.Range(y0, Math.Max(1, y1 - y0));
+                foreach (var y in aim == Aim.Up ? rows : rows.Reverse())
+                {
+                    var run = Enumerable.Range(x0, Math.Max(1, x1 - x0)).Count(x => Lit(x, y));
+                    if (run > 0)
+                        return run;
+                }
+                return 0;
+            }
+
+            var cols = Enumerable.Range(x0, Math.Max(1, x1 - x0));
+            foreach (var x in aim == Aim.Left ? cols : cols.Reverse())
+            {
+                var run = Enumerable.Range(y0, Math.Max(1, y1 - y0)).Count(y => Lit(x, y));
+                if (run > 0)
+                    return run;
+            }
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Outlining a rectangle too narrow to have a border and an interior draws it filled, rather
     /// than throwing.
     ///
